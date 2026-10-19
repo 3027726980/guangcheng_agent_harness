@@ -17,4 +17,4 @@
 | AI Prompt／问题记录 | `ai_prompt_log.md`、`troubleshooting.md` | 记录实际开发决策与故障，不伪造模型实验 |
 | 架构题 | `architecture_study.md` | 十道均为备选研究，最终用户每模块选一题 |
 
-本地版本管理、开发分支与私有 GitHub 远端已建立；未推送时远端仍为空，不能把空仓库链接描述为已提交代码。
+本地版本管理、开发分支与私有 GitHub 远端已建立；开发实现查看 `dev/runtime`，`main` 保留基线。远端发布按毛毛明确授权执行，并核对远端 SHA，不把本地提交当作已推送。

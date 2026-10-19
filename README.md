@@ -137,11 +137,11 @@ npm run build
 
 真实模型需要在页面配置自己的连接。离线假模型只由测试显式注入，生产界面不会自动用假模型替代失败的服务。
 
-详见 [验证记录](dev_docs/verification.md)、[接口与事件](dev_docs/interfaces.md)、[十道架构题备选研究](dev_docs/architecture_study.md) 和 [开发路线](dev_docs/开发路线-2026-10-20.md)。真实供应商的模型行为和真实页面联调不由离线测试代替。
+详见 [逐项验收清单](dev_docs/manual_test_checklist.md)、[验证记录](dev_docs/verification.md)、[接口与事件](dev_docs/interfaces.md)、[十道架构题备选研究](dev_docs/architecture_study.md) 和 [开发路线](dev_docs/开发路线-2026-10-20.md)。真实供应商的模型行为和真实页面联调不由离线测试代替。
 
 ## Git
 
-`main` 保留原题与规划基线，`dev/runtime` 进行开发；每批验证后提交。GitHub 关联私有空仓库 `3027726980/guangcheng_agent_harness`，遵守用户要求不推送。当前 Git 状态与实际提交以 `git status`、`git log --all --oneline` 为准。
+`main` 保留原题与规划基线，`dev/runtime` 保存完整开发实现；每批验证后提交。GitHub 仓库为 [guangcheng_agent_harness](https://github.com/3027726980/guangcheng_agent_harness)，查看代码请使用 [dev/runtime 分支](https://github.com/3027726980/guangcheng_agent_harness/tree/dev/runtime)。推送须由用户明确授权，不自动合并 main 或强推；本地／远端状态以 `git status`、`git log --all --oneline` 和 `git ls-remote --heads origin` 为准。
 
 ## 来源与扩展
 

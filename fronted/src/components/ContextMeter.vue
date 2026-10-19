@@ -24,25 +24,28 @@
     <div class="context-details">
       <strong>上下文容量</strong>
       <p v-if="known">
-        估算已用 {{ format(used) }} / {{ format(capacity) }} tokens
+        估算已用 {{ formatTokenCount(used) }} /
+        {{ formatTokenCount(capacity) }} tokens
       </p>
       <p v-else>
         {{
           capacity
-            ? `容量 ${format(capacity)} tokens，尚未估算用量。`
+            ? `容量 ${formatTokenCount(capacity)} tokens，尚未估算用量。`
             : "配置模型后显示容量。"
         }}
       </p>
       <p v-if="capacity">
         {{
-          String(source).startsWith("default")
-            ? "默认容量 256K"
-            : "供应商提供的容量"
+          String(source).startsWith("default") ? "默认容量" : "供应商提供的容量"
         }}
         · 用量为估算值
       </p>
       <p v-if="known">
-        约剩余 {{ format(Math.max(0, capacity - used)) }} tokens（包含输出预留）
+        约剩余
+        {{
+          formatTokenCount(Math.max(0, capacity - used))
+        }}
+        tokens（包含输出预留）
       </p>
       <n-button text type="primary" @click="showSummary">查看历史摘要</n-button>
     </div>
@@ -52,6 +55,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { NButton, NPopover } from "naive-ui";
+import { formatTokenCount } from "@/lib/token-format";
 const props = defineProps<{
   usage?: Record<string, any>;
   capacity: number;
@@ -77,9 +81,6 @@ const label = computed(() =>
     ? `上下文已使用约 ${Math.round(percent.value)}%，点击查看容量和摘要`
     : "上下文用量尚未估算，点击查看容量",
 );
-function format(value: number) {
-  return value.toLocaleString();
-}
 </script>
 
 <style scoped>

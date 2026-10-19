@@ -62,6 +62,7 @@
 import { computed, ref, watch } from "vue";
 import { NPagination, NSelect, NTag } from "naive-ui";
 import { eventLabel, runStatus, traceSteps } from "@/lib/chat-presentation";
+import { formatTokenCount } from "@/lib/token-format";
 import type { Run, TraceEvent } from "@/types/harness";
 const props = defineProps<{ runs: Run[]; events: TraceEvent[] }>();
 const selectedRun = ref<string | null>(null),
@@ -114,7 +115,7 @@ function describe(event: TraceEvent) {
   if (event.type === "model.finished")
     return `结束原因：${event.data.finish_reason}`;
   if (event.type === "context.usage")
-    return `估算 ${Number(event.data.estimated_tokens).toLocaleString()} tokens`;
+    return `估算 ${formatTokenCount(Number(event.data.estimated_tokens))} tokens`;
   if (event.type === "model.retry")
     return `${event.data.reason || "模型请求暂时失败"}，${event.data.delay_seconds} 秒后重试`;
   return eventLabel(event.type);

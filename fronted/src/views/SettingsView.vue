@@ -27,7 +27,7 @@
               }}</n-tag
             >
             <small
-              >Context {{ profile.context_capacity.toLocaleString() }} ·
+              >Context {{ formatTokenCount(profile.context_capacity) }} ·
               {{
                 profile.capacity_source.startsWith("default")
                   ? "默认值"
@@ -92,7 +92,10 @@
           /></n-form-item>
           <p class="field-help">
             保存时自动测试连接并读取容量；读取不到使用默认
-            256K。连接测试不代表所有工具能力均已验证。
+            {{
+              formatTokenCount(262144)
+            }}
+            tokens。连接测试不代表所有工具能力均已验证。
           </p>
           <n-space
             ><n-button
@@ -174,6 +177,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import { formatTokenCount } from "@/lib/token-format";
 import {
   NAlert,
   NButton,
@@ -322,7 +326,7 @@ function editProfile(profile: Profile) {
 function report(profile: Profile) {
   testSuccess.value = profile.test_status === "connected";
   testMessage.value = testSuccess.value
-    ? `连接成功。Context ${profile.context_capacity.toLocaleString()} tokens，${profile.capacity_source.startsWith("default") ? "使用默认容量256K" : "已从供应商读取容量"}。`
+    ? `连接成功。Context ${formatTokenCount(profile.context_capacity)} tokens，${profile.capacity_source.startsWith("default") ? "使用默认容量" : "已从供应商读取容量"}。`
     : "连接失败，配置已保留。请检查地址、模型、密钥及供应商支持情况。";
 }
 async function saveProfile() {

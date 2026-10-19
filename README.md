@@ -142,6 +142,10 @@ npm run build
 
 详见 [逐项验收清单](dev_docs/manual_test_checklist.md)、[验证记录](dev_docs/verification.md)、[接口与事件](dev_docs/interfaces.md)、[十道架构题备选研究](dev_docs/architecture_study.md) 和 [开发路线](dev_docs/开发路线-2026-10-20.md)。真实供应商的模型行为和真实页面联调不由离线测试代替。
 
+## 后端学习
+
+三天深入导读见 [后端学习路线](dev_docs/backend_learning_3days.md)，包含每日阅读范围、核心函数、断点、练习与验收；按函数查位置可使用 [源码与测试符号索引](dev_docs/backend_source_index.md)。
+
 ## Git
 
 近期问题、原因、修复提交和验证边界汇总见 [Bug 修复与体验改进记录](dev_docs/bugfix_log.md)。

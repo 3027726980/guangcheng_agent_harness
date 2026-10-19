@@ -84,19 +84,6 @@
           >
         </div>
       </n-alert>
-      <n-alert
-        v-if="summaryOpen"
-        type="info"
-        title="历史摘要"
-        closable
-        @close="summaryOpen = false"
-        :show-icon="false"
-        class="summary-box"
-        >{{
-          state.summary?.text ||
-          "尚未生成摘要。达到阈值后自动整理，原历史保留。"
-        }}</n-alert
-      >
       <div ref="scrollArea" class="messages">
         <div v-if="!state.messages.length" class="empty-chat">
           <div class="eyebrow">AGENT HARNESS</div>
@@ -324,6 +311,24 @@
       />
     </n-drawer-content>
   </n-drawer>
+  <n-modal
+    v-model:show="summaryOpen"
+    preset="card"
+    title="历史摘要"
+    role="dialog"
+    aria-label="历史摘要"
+    class="summary-modal"
+    style="width: min(720px, 95vw)"
+    closable
+  >
+    <div class="summary-content">{{
+      state.summary?.text ||
+      "尚未生成摘要。可手动压缩或等待达到阈值后自动整理，原历史保留。"
+    }}</div>
+    <template #footer>
+      <n-button @click="summaryOpen = false">关闭</n-button>
+    </template>
+  </n-modal>
   <n-modal
     v-model:show="editOpen"
     preset="card"
@@ -999,9 +1004,12 @@ small {
   text-decoration: line-through;
   color: #99a39b;
 }
-.summary-box {
-  margin: 8px 20px;
+.summary-content {
+  max-height: min(60vh, 560px);
+  overflow: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
 }
 .queue-strip {
   font-size: 12px;

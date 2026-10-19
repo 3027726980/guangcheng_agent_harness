@@ -99,9 +99,43 @@ class Runtime:
 
     async def session(self, session_id, user_id):
         session = await self.db.get(session_id)
-        if not session or session.get("user_id") != user_id or session.get("kind") != "session":
+        if (
+            not session
+            or session.get("user_id") != user_id
+            or session.get("kind") != "session"
+            or session.get("deleted")
+        ):
             raise DomainError("会话不存在或不属于当前演示用户", 404)
         return session
+
+    async def delete_session(self, session_id, user_id):
+        async with self.control:
+            session = await self.session(session_id, user_id)
+            runs = await self.db.list("run", parent=session_id)
+            if any(run["status"] not in TERMINAL for run in runs):
+                raise DomainError("请先停止当前任务并取消排队消息，再删除对话", 409)
+            session.update(deleted=True, deleted_at=time.time())
+            await self.db.put("session", session)
+            await self.emit("session.deleted", {"id": session_id}, user_id=user_id, session_id=session_id)
+            return {"deleted": True, "id": session_id}
+
+    async def configured_models(self, settings):
+        profiles = []
+        for label, key in (
+            ("对话", settings.default_profile_id),
+            ("摘要", settings.summary_profile_id or settings.default_profile_id),
+        ):
+            profile = await self.db.get(key) if key else None
+            if not profile or profile.get("kind") != "profile":
+                raise DomainError(f"请先在全局设置中配置并选择{label}模型", 409)
+            if profile.get("test_status") != "connected":
+                raise DomainError(f"{label}模型连接测试未通过，请在全局设置中重新测试", 409)
+            output = settings.max_output_tokens if label == "对话" else settings.summary_tokens
+            capacity = profile.get("context_capacity", 262144)
+            if capacity <= output + max(256, int(capacity * 0.05)) + 256:
+                raise DomainError(f"{label}模型容量不足，请调整输出上限或模型配置", 409)
+            profiles.append(profile)
+        return profiles
 
     async def create_session(self, user_id, title):
         session = {
@@ -125,6 +159,7 @@ class Runtime:
             previous = await self.db.get(request_key)
             if previous:
                 return await self.db.get(previous["run_id"])
+            await self.configured_models(await self.settings())
             run = {
                 "id": uid(),
                 "session_id": session_id,
@@ -324,14 +359,7 @@ class Runtime:
         try:
             settings = await self.settings()
             run["settings"] = settings.model_dump()
-            profile = await self.db.get(settings.default_profile_id) if settings.default_profile_id else None
-            if not profile or profile.get("kind") != "profile":
-                raise DomainError("请先在全局设置中配置并选择可用模型")
-            summary_profile = (
-                await self.db.get(settings.summary_profile_id) if settings.summary_profile_id else profile
-            )
-            if not summary_profile or summary_profile.get("kind") != "profile":
-                raise DomainError("摘要模型配置不存在")
+            profile, summary_profile = await self.configured_models(settings)
             run["profile"] = dict(profile)
             run["summary_profile"] = dict(summary_profile)
             run["model_snapshot"] = {

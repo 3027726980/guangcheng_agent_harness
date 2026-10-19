@@ -57,6 +57,13 @@ def test_api_identity_models_settings_and_shared_todos(tmp_path):
         assert client.get("/api/todos", headers={"X-Demo-User": "B"}).json()["items"] == []
         settings["context_target"] = 0.9
         assert client.put("/api/settings", json=settings).status_code == 422
+        assert (
+            client.delete(f"/api/sessions/{session['id']}", headers={"X-Demo-User": "B"}).status_code == 404
+        )
+        assert client.delete(f"/api/sessions/{session['id']}").status_code == 200
+        assert client.get("/api/sessions").json() == []
+        assert client.get(f"/api/sessions/{session['id']}").status_code == 404
+        assert len(client.get("/api/todos").json()["items"]) == 1
 
 
 async def test_sse_disconnect_cancels_owned_active_and_queued_runs(harness, tmp_path):

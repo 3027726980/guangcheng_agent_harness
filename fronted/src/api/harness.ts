@@ -1,5 +1,6 @@
 import { reactive } from "vue";
 import { SSEParser } from "@/lib/sse";
+import { configurationIssue } from "@/lib/chat-presentation";
 import type {
   Message,
   Profile,
@@ -24,12 +25,15 @@ export const state = reactive({
   todos: [] as Todo[],
   profiles: [] as Profile[],
   settings: {} as Record<string, any>,
+  settingsStatus: "loading",
+  sessionLoading: false,
   summary: null as Summary | null,
   live: {} as Record<string, { callId: string; text: string }>,
 });
 let controller: AbortController | undefined;
 let generation = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+const deletionRefreshes = new Map<string, Promise<void>>();
 
 export async function api<T = any>(
   path: string,
@@ -74,24 +78,61 @@ export async function loadTodos() {
   state.todos = (await api("/todos")).items;
 }
 export async function loadSettings() {
-  const [settings, profiles] = await Promise.all([
-    api("/settings"),
-    api<Profile[]>("/models"),
-  ]);
-  state.settings = settings;
-  state.profiles = profiles;
+  state.settingsStatus = "loading";
+  try {
+    const [settings, profiles] = await Promise.all([
+      api("/settings"),
+      api<Profile[]>("/models"),
+    ]);
+    state.settings = settings;
+    state.profiles = profiles;
+    state.settingsStatus = "ready";
+  } catch (error) {
+    state.settingsStatus = "error";
+    throw error;
+  }
 }
 
 export async function selectSession(id: string) {
   state.selected = id;
   state.live = {};
+  state.messages = [];
+  state.runs = [];
+  state.events = [];
+  state.summary = null;
+  state.sessionLoading = true;
   sessionStorage.setItem(`harness-session:${state.user}`, id);
-  const result = await api(`/sessions/${id}`);
-  if (state.selected !== id) return;
-  state.messages = result.messages;
-  state.runs = result.runs;
-  state.events = result.events;
-  state.summary = result.summary;
+  try {
+    const result = await api(`/sessions/${id}`);
+    if (state.selected !== id) return;
+    state.messages = result.messages;
+    state.runs = result.runs;
+    state.events = result.events;
+    state.summary = result.summary;
+  } finally {
+    if (state.selected === id) state.sessionLoading = false;
+  }
+}
+
+function refreshDeletedSession(id: string): Promise<void> {
+  const existing = deletionRefreshes.get(id);
+  if (existing) return existing;
+  const refresh = (async () => {
+    await loadSessions();
+    if (state.selected !== id) return;
+    const next = state.sessions[0];
+    if (next) await selectSession(next.id);
+    else await newSession();
+  })();
+  deletionRefreshes.set(id, refresh);
+  return refresh.finally(() => deletionRefreshes.delete(id));
+}
+
+export async function deleteSession(id: string) {
+  await api(`/sessions/${id}`, "DELETE");
+  // The SSE notification also reaches this window; refresh only once after removal.
+  if (state.sessions.some((session) => session.id === id))
+    await refreshDeletedSession(id);
 }
 
 export async function newSession() {
@@ -105,6 +146,10 @@ export async function newSession() {
 function receive(event: TraceEvent) {
   if (event.type === "todo.changed") void safely(loadTodos);
   if (event.type === "session.created") void safely(loadSessions);
+  if (event.type === "session.deleted") {
+    void safely(() => refreshDeletedSession(event.data.id));
+    return;
+  }
   if (event.type === "models.changed" || event.type === "settings.changed")
     void safely(loadSettings);
   if (event.session_id !== state.selected) return;
@@ -227,6 +272,14 @@ export async function switchUser(user: string) {
 }
 
 export async function send(content: string, steeringRunId?: string) {
+  const issue = configurationIssue(
+    state.settingsStatus,
+    state.settings,
+    state.profiles,
+  );
+  if (issue) throw new Error(issue);
+  if (!state.selected || state.sessionLoading)
+    throw new Error("请等待对话加载完成");
   if (!state.connected) throw new Error("请等待事件连接就绪");
   const requestId = crypto.randomUUID();
   if (steeringRunId)

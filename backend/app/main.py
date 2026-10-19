@@ -126,11 +126,15 @@ def create_app(database_path=None, model=None):
 
     @app.get("/api/sessions")
     async def sessions(owner=Depends(user)):
-        return await runtime.db.list("session", owner=owner)
+        return [item for item in await runtime.db.list("session", owner=owner) if not item.get("deleted")]
 
     @app.post("/api/sessions")
     async def create_session(body: SessionCreate, owner=Depends(user)):
         return await runtime.create_session(owner, body.title)
+
+    @app.delete("/api/sessions/{session_id}")
+    async def delete_session(session_id: str, owner=Depends(user)):
+        return await runtime.delete_session(session_id, owner)
 
     @app.get("/api/sessions/{session_id}")
     async def session_detail(session_id: str, owner=Depends(user)):

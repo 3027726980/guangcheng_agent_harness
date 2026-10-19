@@ -18,6 +18,7 @@
 | POST | `/clients/{id}/disconnect` | 显式断开对应客户端 |
 | GET / POST | `/sessions` | 会话列表／以 title 创建会话 |
 | GET | `/sessions/{id}` | 会话、消息、执行、摘要、最近事件 |
+| DELETE | `/sessions/{id}` | 按用户归属逻辑删除；有运行／排队任务时返回 409，共享待办保留 |
 | POST | `/sessions/{id}/messages` | client_id、request_id、content；返回任务与队列状态 |
 | POST | `/runs/{id}/steering` | request_id、content；只接受运行中的任务 |
 | POST | `/runs/{id}/cancel` | 按明确任务 ID 停止 |
@@ -52,8 +53,11 @@
 | `context.usage / compacting / compacted / compaction_failed` | 估算、容量来源、覆盖范围、摘要及失败状态 |
 | `todo.changed` | 当前用户共享待办已变化，页面重新查询 |
 | `session.created / models.changed / settings.changed` | 刷新对应数据 |
+| `session.deleted` | 被删除的会话 ID；各窗口刷新列表，当前会话被删除时切换到其他会话或新建 |
 
 前端保存最近 2000 条当前会话事件，详情接口最多返回最近 2000 条；数据库保留完整事件。SSE 实时连接不作为历史重放源，重连后从详情接口恢复状态。
+
+页面链路按任务及调用 ID 聚合模型／工具的开始和结果，每页 8 个步骤，默认折叠原始记录；文本 delta 和 message.created 不单列步骤，对话区保留最终消息。缺少或未通过测试的模型、容量与输出预留冲突，会在提交入队前返回 409，不创建空任务。
 
 ## SQLite
 

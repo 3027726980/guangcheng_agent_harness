@@ -1,11 +1,12 @@
 import asyncio
 import json
 
+import pytest
 import pytest_asyncio
 
 from app.context import tool_groups
 from app.llm import ModelFailure, ScriptedModel
-from app.runtime import Client, Runtime
+from app.runtime import Client, DomainError, Runtime
 from app.schemas import MessageRequest, ModelReply, RuntimeSettings, SteeringRequest, ToolCall
 from app.storage import Database, uid
 
@@ -237,3 +238,51 @@ async def test_settings_snapshot_and_two_window_isolation(harness):
     assert (await terminal(rt, first["id"]))["status"] == "cancelled"
     assert (await rt.db.get(first["id"]))["settings"]["max_model_calls"] == 20
     assert (await rt.db.get(second["id"]))["status"] == "completed"
+
+
+@pytest.mark.parametrize("problem", ["missing", "failed", "summary_missing", "capacity"])
+async def test_invalid_configuration_rejected_before_queueing(harness, problem):
+    rt, model, client, session, _ = harness
+    settings = (await rt.settings()).model_dump()
+    if problem == "missing":
+        settings["default_profile_id"] = None
+    elif problem == "summary_missing":
+        settings["summary_profile_id"] = "not-present"
+    else:
+        profile = await rt.db.get("profile")
+        profile.update({"test_status": "failed"} if problem == "failed" else {"context_capacity": 2048})
+        await rt.db.put("profile", profile)
+    await rt.db.put("settings", {"id": "runtime-settings", **settings})
+    with pytest.raises(DomainError) as error:
+        await send(rt, client, session)
+    assert error.value.status == 409
+    assert await rt.db.list("run", parent=session["id"]) == []
+    assert model.inputs == []
+
+
+async def test_deletion_rejects_busy_session_then_hides_history(harness):
+    rt, model, client, session, _ = harness
+    entered = asyncio.Event()
+
+    async def block(messages, on_text):
+        entered.set()
+        await asyncio.Event().wait()
+
+    model.replies = [block]
+    run = await send(rt, client, session)
+    await asyncio.wait_for(entered.wait(), 2)
+    queued = await send(rt, client, session)
+    with pytest.raises(DomainError) as busy:
+        await rt.delete_session(session["id"], "A")
+    assert busy.value.status == 409
+    await rt.cancel(queued["id"], "A")
+    await rt.cancel(run["id"], "A")
+    await terminal(rt, run["id"])
+    with pytest.raises(DomainError) as forbidden:
+        await rt.delete_session(session["id"], "B")
+    assert forbidden.value.status == 404
+    await rt.delete_session(session["id"], "A")
+    with pytest.raises(DomainError):
+        await send(rt, client, session)
+    assert await rt.db.list("message", parent=session["id"])
+    assert (await rt.db.history_events("A"))[-1]["type"] == "session.deleted"

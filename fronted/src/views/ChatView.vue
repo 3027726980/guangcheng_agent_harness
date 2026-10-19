@@ -5,15 +5,35 @@
         >＋ 新对话</n-button
       >
       <div class="section-label">当前用户的独立会话</div>
-      <button
+      <div
         v-for="session in state.sessions"
         :key="session.id"
         class="session-row"
         :class="{ selected: state.selected === session.id }"
-        @click="safely(() => selectSession(session.id))"
       >
-        {{ session.title }}<small>{{ session.id.slice(0, 8) }}</small>
-      </button>
+        <button
+          class="session-select"
+          @click="safely(() => selectSession(session.id))"
+        >
+          {{ session.title }}<small>{{ session.id.slice(0, 8) }}</small>
+        </button>
+        <n-popconfirm
+          @positive-click="safely(() => deleteSession(session.id))"
+          positive-text="删除"
+          negative-text="保留"
+        >
+          <template #trigger
+            ><button
+              class="session-delete"
+              :aria-label="`删除对话 ${session.title}`"
+              title="删除对话"
+            >
+              ×
+            </button></template
+          >
+          删除此对话？共享待办会保留；运行或排队中的任务需要先停止。
+        </n-popconfirm>
+      </div>
       <p class="hint">不同会话可同时执行；聊天独立，待办共享。</p>
     </aside>
 
@@ -37,21 +57,25 @@
           }}</n-button></n-space
         >
       </div>
-      <div v-if="contextUsage" class="context-strip">
-        Context 估算 {{ number(contextUsage.estimated_tokens) }} /
-        {{ number(contextUsage.capacity) }}
-        <span
-          >{{
-            String(contextUsage.source).startsWith("default")
-              ? "默认容量 256K"
-              : "供应商容量"
-          }}
-          · 保守估算</span
-        >
-        <n-button text size="tiny" @click="summaryOpen = !summaryOpen">{{
-          summaryOpen ? "收起摘要" : "查看摘要"
-        }}</n-button>
-      </div>
+      <n-alert
+        v-if="setupIssue"
+        type="warning"
+        class="setup-alert"
+        :show-icon="false"
+      >
+        {{ setupIssue }}
+        <div class="setup-actions">
+          <n-button size="small" @click="router.push('/settings')"
+            >前往设置</n-button
+          >
+          <n-button
+            v-if="state.settingsStatus === 'error'"
+            size="small"
+            @click="safely(boot)"
+            >重试读取</n-button
+          >
+        </div>
+      </n-alert>
       <n-alert
         v-if="summaryOpen"
         type="info"
@@ -77,39 +101,23 @@
             </button>
           </div>
         </div>
-        <article
-          v-for="row in state.messages"
-          :key="row.id"
-          class="message"
-          :class="row.message.role"
-        >
-          <div class="message-label">
-            {{
-              row.message.role === "user"
-                ? row.input_kind === "steering"
-                  ? "你 · 引导"
-                  : "你"
-                : row.message.role === "tool"
-                  ? "工具结果"
+        <template v-for="item in visibleMessages" :key="item.id">
+          <ToolSteps v-if="item.kind === 'tools'" :rows="item.rows" />
+          <article v-else class="message" :class="item.rows[0]!.message.role">
+            <div class="message-label">
+              {{
+                item.rows[0]!.message.role === "user"
+                  ? item.rows[0]!.input_kind === "steering"
+                    ? "你 · 引导"
+                    : "你"
                   : "Agent"
-            }}
-          </div>
-          <template v-if="row.message.role === 'tool'">
-            <details class="tool-result">
-              <summary>{{ toolLabel(row.message.content) }}</summary>
-              <pre>{{ pretty(row.message.content) }}</pre>
-            </details>
-          </template>
-          <template v-else>
-            <div v-if="row.message.content" class="message-text">
-              {{ row.message.content }}
+              }}
             </div>
-            <details v-if="row.message.tool_calls?.length" class="tool-result">
-              <summary>请求 {{ row.message.tool_calls.length }} 个工具</summary>
-              <pre>{{ JSON.stringify(row.message.tool_calls, null, 2) }}</pre>
-            </details>
-          </template>
-        </article>
+            <div v-if="item.rows[0]!.message.content" class="message-text">
+              {{ item.rows[0]!.message.content }}
+            </div>
+          </article>
+        </template>
         <article
           v-for="(live, runId) in state.live"
           :key="runId"
@@ -130,7 +138,15 @@
       </div>
       <div v-if="queued.length" class="queue-strip">
         <strong>等待执行 {{ queued.length }} 条</strong>
-        <div v-for="run in queued" :key="run.id">{{ run.content }}</div>
+        <div v-for="run in queued" :key="run.id">
+          {{ run.content }}
+          <n-button
+            text
+            size="tiny"
+            @click="safely(() => api(`/runs/${run.id}/cancel`, 'POST'))"
+            >取消排队</n-button
+          >
+        </div>
       </div>
       <div v-if="pendingSteering.length" class="queue-strip steering-strip">
         等待生效的引导：
@@ -149,7 +165,7 @@
         />
         <div class="composer-actions">
           <span>Enter 发送 · Shift+Enter 换行</span
-          ><n-space>
+          ><n-space align="center" :size="8">
             <n-button
               v-if="activeRun"
               type="error"
@@ -160,15 +176,21 @@
             >
             <n-button
               v-if="activeRun?.status === 'running'"
-              :disabled="!input.trim() || !state.connected || sending"
+              :disabled="!canSend || !input.trim() || sending"
               @click="submit(true)"
               >引导</n-button
             >
+            <ContextMeter
+              :usage="contextUsage"
+              :capacity="selectedProfile?.context_capacity || 0"
+              :source="selectedProfile?.capacity_source || ''"
+              @summary="summaryOpen = !summaryOpen"
+            />
             <n-button
               type="primary"
               attr-type="submit"
               :loading="sending"
-              :disabled="!input.trim() || !state.connected"
+              :disabled="!canSend || !input.trim() || sending"
               >{{ activeRun ? "加入队列" : "发送" }}</n-button
             >
           </n-space>
@@ -225,19 +247,12 @@
     placement="right"
   >
     <n-drawer-content title="完整执行链路" closable>
-      <p class="hint">
-        模型调用、工具、重试、Context 压缩、引导与取消。参数按实际执行记录展示。
-      </p>
-      <div v-for="event in traceEvents" :key="event.id" class="trace-event">
-        <div>
-          <strong>{{ event.type }}</strong
-          ><small
-            >{{ new Date(event.timestamp * 1000).toLocaleTimeString() }} ·
-            {{ event.run_id?.slice(0, 8) }}</small
-          >
-        </div>
-        <pre>{{ JSON.stringify(event.data, null, 2) }}</pre>
-      </div>
+      <TracePanel
+        v-if="traceOpen"
+        :key="state.selected"
+        :runs="state.runs"
+        :events="state.events"
+      />
     </n-drawer-content>
   </n-drawer>
   <n-modal
@@ -258,6 +273,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import {
   NAlert,
   NButton,
@@ -266,12 +282,15 @@ import {
   NDrawerContent,
   NInput,
   NModal,
+  NPopconfirm,
   NSpace,
   NTag,
 } from "naive-ui";
 import {
   api,
+  boot,
   changeTodo,
+  deleteSession,
   loadTodos,
   newSession,
   safely,
@@ -280,7 +299,16 @@ import {
   state,
 } from "@/api/harness";
 import type { Todo } from "@/types/harness";
+import ContextMeter from "@/components/ContextMeter.vue";
+import ToolSteps from "@/components/ToolSteps.vue";
+import TracePanel from "@/components/TracePanel.vue";
+import {
+  configurationIssue,
+  contextSnapshot,
+  conversationItems,
+} from "@/lib/chat-presentation";
 
+const router = useRouter();
 const input = ref(""),
   sending = ref(false),
   traceOpen = ref(false),
@@ -313,14 +341,23 @@ const historicalProblems = computed(() =>
     ["cancelled", "failed", "limited", "interrupted"].includes(run.status),
   ),
 );
-const traceEvents = computed(() =>
-  state.events.filter((event) => event.type !== "model.delta"),
+const setupIssue = computed(() =>
+  configurationIssue(state.settingsStatus, state.settings, state.profiles),
 );
-const contextUsage = computed(
+const canSend = computed(
   () =>
-    [...state.events].reverse().find((event) => event.type === "context.usage")
-      ?.data,
+    !setupIssue.value &&
+    state.connected &&
+    !!state.selected &&
+    !state.sessionLoading,
 );
+const selectedProfile = computed(() =>
+  state.profiles.find(
+    (profile) => profile.id === state.settings.default_profile_id,
+  ),
+);
+const contextUsage = computed(() => contextSnapshot(state.events));
+const visibleMessages = computed(() => conversationItems(state.messages));
 const pendingSteering = computed(() => {
   const latest = new Map<string, (typeof state.events)[number]>();
   state.events
@@ -346,26 +383,6 @@ const activityText = computed(() => {
   if (event?.type === "tool.started") return `正在执行 ${event.data.name}…`;
   return "Agent 正在处理…";
 });
-function number(value: unknown) {
-  return Number(value || 0).toLocaleString();
-}
-function pretty(content: string | null) {
-  try {
-    return JSON.stringify(JSON.parse(content || "{}"), null, 2);
-  } catch {
-    return content;
-  }
-}
-function toolLabel(content: string | null) {
-  try {
-    const result = JSON.parse(content || "{}");
-    return result.ok
-      ? "工具执行成功 · 展开结果"
-      : `工具未成功 · ${result.error?.message || "查看详情"}`;
-  } catch {
-    return "查看工具结果";
-  }
-}
 function statusLabel(status: string) {
   return (
     (
@@ -391,7 +408,7 @@ function reasonLabel(reason?: string) {
 }
 async function submit(steering: boolean) {
   const content = input.value.trim();
-  if (!content || sending.value) return;
+  if (!content || sending.value || !canSend.value) return;
   sending.value = true;
   await safely(async () => {
     await send(content, steering ? activeRun.value?.id : undefined);
@@ -500,16 +517,53 @@ watch(
   letter-spacing: 0.07em;
 }
 .session-row {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
   border: 0;
   background: transparent;
   text-align: left;
-  padding: 12px;
+  padding: 0 6px 0 0;
   border-radius: 9px;
   color: #47564f;
   cursor: pointer;
   margin-bottom: 4px;
+}
+.session-select {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.session-delete {
+  border: 0;
+  background: transparent;
+  color: #8a988f;
+  cursor: pointer;
+  font-size: 20px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.session-delete:hover {
+  background: #f5e9e4;
+  color: #a65d46;
+}
+.setup-alert {
+  margin: 12px 20px 0;
+  flex-shrink: 0;
+}
+.setup-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 .session-row.selected {
   background: #e2eee7;
@@ -602,27 +656,6 @@ small {
   font-size: 14px;
   color: #263d30;
 }
-.tool-result {
-  border: 1px solid #e0e7e2;
-  border-radius: 8px;
-  background: #f8faf8;
-  padding: 10px;
-  margin-top: 8px;
-  font-size: 12px;
-}
-.tool-result summary {
-  cursor: pointer;
-  color: #51745c;
-}
-pre {
-  font-size: 11px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.65;
-  max-height: 360px;
-  overflow: auto;
-  margin-top: 8px;
-}
 .composer {
   padding: 16px 20px;
   border-top: 1px solid #edf0ed;
@@ -683,18 +716,6 @@ pre {
   text-decoration: line-through;
   color: #99a39b;
 }
-.context-strip {
-  padding: 8px 20px;
-  background: #f7f9f4;
-  color: #78906e;
-  font-size: 11px;
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.context-strip span {
-  color: #96a08e;
-}
 .summary-box {
   margin: 8px 20px;
   white-space: pre-wrap;
@@ -721,14 +742,6 @@ pre {
   border-radius: 8px;
   margin: 12px 0;
   color: #8b725a;
-}
-.trace-event {
-  padding: 15px 0;
-  border-bottom: 1px solid #e7ebe7;
-}
-.trace-event strong {
-  font-size: 12px;
-  color: #52725c;
 }
 .activity-line {
   font-size: 12px;

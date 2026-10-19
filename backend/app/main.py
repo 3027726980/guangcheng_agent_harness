@@ -227,7 +227,7 @@ def create_app(database_path=None, model=None):
         profile = await runtime.db.get(profile_id)
         if not profile or profile.get("kind") != "profile":
             raise DomainError("模型配置不存在", 404)
-        body = ModelProfile.model_validate({k: profile[k] for k in ModelProfile.model_fields})
+        body = ModelProfile.model_validate({k: profile[k] for k in ModelProfile.model_fields if k in profile})
         return await save_profile(body, profile_id)
 
     @app.delete("/api/models/{profile_id}")

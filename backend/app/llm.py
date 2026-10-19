@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
 import httpx
@@ -42,11 +44,13 @@ class OpenAIModel:
                 kwargs = {
                     "model": profile["model"],
                     "messages": messages,
-                    "max_tokens": max_tokens,
                     "stream": on_text is not None,
                 }
                 if tools:
                     kwargs["tools"] = tools
+                kwargs[profile.get("output_token_parameter", "max_tokens")] = max_tokens
+                if profile.get("reasoning_effort"):
+                    kwargs["reasoning_effort"] = profile["reasoning_effort"]
                 response = await client.chat.completions.create(**kwargs)
                 if on_text is None:
                     choice = response.choices[0]
@@ -95,7 +99,14 @@ class OpenAIModel:
             try:
                 retry_after = max(0.0, float(error.response.headers.get("retry-after", 0)))
             except ValueError:
-                retry_after = 0.0
+                try:
+                    retry_after = max(
+                        0.0,
+                        parsedate_to_datetime(error.response.headers["retry-after"]).timestamp()
+                        - time.time(),
+                    )
+                except (ValueError, KeyError, TypeError, OverflowError):
+                    retry_after = 0.0
             raise ModelFailure(
                 f"模型接口返回 HTTP {error.status_code}",
                 retryable=error.status_code in {408, 429} or error.status_code >= 500,
@@ -124,7 +135,7 @@ class OpenAIModel:
     async def capacity(self, profile, timeout=15.0):
         headers = {"Authorization": f"Bearer {profile.get('api_key') or 'local-no-key'}"}
         paths = [f"/models/{quote(profile['model'], safe='')}", "/models"]
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             for path in paths:
                 try:
                     response = await client.get(profile["base_url"].rstrip("/") + path, headers=headers)

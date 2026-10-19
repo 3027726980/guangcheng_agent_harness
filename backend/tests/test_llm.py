@@ -99,3 +99,61 @@ async def test_stream_without_finish_marker_fails():
         await OpenAIModel(httpx.MockTransport(respond)).complete(
             PROFILE, [{"role": "user", "content": "x"}], None, 20, 5, output
         )
+
+
+async def test_completion_token_parameter_and_reasoning_configuration():
+    def respond(request):
+        payload = json.loads(request.content)
+        assert payload["max_completion_tokens"] == 64
+        assert "max_tokens" not in payload
+        assert payload["reasoning_effort"] == "low"
+        return httpx.Response(
+            200,
+            json={
+                "id": "test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "OK"}}
+                ],
+            },
+        )
+
+    profile = {**PROFILE, "output_token_parameter": "max_completion_tokens", "reasoning_effort": "low"}
+    reply = await OpenAIModel(httpx.MockTransport(respond)).complete(
+        profile, [{"role": "user", "content": "x"}], None, 64, 5
+    )
+    assert reply.text == "OK"
+
+
+@pytest.mark.parametrize("capacity,source", [(8192, "provider:context_length"), (None, "default:256K")])
+async def test_profile_probe_reads_capacity_or_falls_back(capacity, source):
+    def respond(request):
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "fixture",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": "OK"},
+                        }
+                    ],
+                },
+            )
+        data = {"id": "fixture"}
+        if capacity:
+            data["context_length"] = capacity
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [data]})
+        return httpx.Response(200, json=data)
+
+    result = await OpenAIModel(httpx.MockTransport(respond)).probe(PROFILE)
+    assert result["context_capacity"] == (capacity or 262144)
+    assert result["capacity_source"] == source

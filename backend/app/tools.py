@@ -1,10 +1,12 @@
 """Registered tools and explicit execution policies. No arbitrary eval or framework."""
 
 import ast
+import inspect
 import operator
 import time
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
+from typing import Callable
 
 from pydantic import BaseModel
 
@@ -24,6 +26,7 @@ class Tool:
     description: str
     arguments: type[BaseModel]
     execution_mode: str
+    handler: Callable | None = None
 
     def schema(self):
         return {
@@ -40,10 +43,22 @@ class ToolRegistry:
     def __init__(self):
         self.tools: dict[str, Tool] = {}
         self.register(
-            Tool("calculator", "计算受限数学表达式，支持括号、小数、+ - * / %。", CalculatorArgs, "parallel")
+            Tool(
+                "calculator",
+                "计算受限数学表达式，支持括号、小数、+ - * / %。",
+                CalculatorArgs,
+                "parallel",
+                lambda args, db, owner, operation: calculate(args.expression),
+            )
         )
         self.register(
-            Tool("search", "搜索固定样例资料（MOCK，非联网）。没有匹配返回空结果。", SearchArgs, "parallel")
+            Tool(
+                "search",
+                "搜索固定样例资料（MOCK，非联网）。没有匹配返回空结果。",
+                SearchArgs,
+                "parallel",
+                lambda args, db, owner, operation: search(args.query, args.limit),
+            )
         )
         self.register(
             Tool(
@@ -51,12 +66,15 @@ class ToolRegistry:
                 "当前用户共享待办：add/list/update/complete/delete。修改前先list取得ID和版本。",
                 TodoArgs,
                 "sequential",
+                lambda args, db, owner, operation: todo(db, owner, args, operation),
             )
         )
 
     def register(self, tool):
         if tool.name in self.tools:
             raise ValueError(f"工具重复注册：{tool.name}")
+        if not callable(tool.handler):
+            raise ValueError("工具必须提供执行函数")
         self.tools[tool.name] = tool
 
     def schemas(self):
@@ -70,11 +88,8 @@ class ToolRegistry:
         if not tool:
             raise ToolError("unknown_tool", f"未知工具：{call.name}")
         arguments = tool.arguments.model_validate_json(call.arguments)
-        if call.name == "calculator":
-            return calculate(arguments.expression)
-        if call.name == "search":
-            return search(arguments.query, arguments.limit)
-        return await todo(db, user_id, arguments, operation_id)
+        result = tool.handler(arguments, db, user_id, operation_id)
+        return await result if inspect.isawaitable(result) else result
 
 
 def calculate(expression: str):
@@ -170,6 +185,7 @@ async def todo(db, user_id, args: TodoArgs, operation_id):
         if args.action == "add":
             item = {
                 "id": uid(),
+                "kind": "todo",
                 "user_id": user_id,
                 "title": args.title,
                 "notes": args.notes or "",
@@ -181,7 +197,12 @@ async def todo(db, user_id, args: TodoArgs, operation_id):
             }
         else:
             item = await db.get(args.todo_id, connection)
-            if not item or item.get("user_id") != user_id or item.get("deleted"):
+            if (
+                not item
+                or item.get("kind") != "todo"
+                or item.get("user_id") != user_id
+                or item.get("deleted")
+            ):
                 raise ToolError("not_found", "待办不存在或不属于当前用户")
             if item["version"] != args.expected_version:
                 raise ToolError("version_conflict", "待办已被其他窗口修改，请重新查询后再操作")

@@ -37,6 +37,8 @@ class ModelProfile(StrictModel):
     base_url: str = Field(min_length=1, max_length=1000)
     api_key: str = Field(default="", max_length=4096)
     model: str = Field(min_length=1, max_length=200)
+    output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
 
     @model_validator(mode="after")
     def validate_url(self):

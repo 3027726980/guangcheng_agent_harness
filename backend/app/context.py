@@ -1,6 +1,9 @@
 """Protocol-aware compaction with immutable full history and explicit coverage."""
 
 import json
+from functools import lru_cache
+
+import tiktoken
 
 from app.llm import ModelFailure
 
@@ -9,13 +12,20 @@ class ContextFailure(Exception):
     pass
 
 
-def tokens(value) -> int:
-    """Conservative UTF-8 byte estimate, including JSON structure; not exact tokens.
+@lru_cache(maxsize=32)
+def tokenizer_for(model):
+    try:
+        return tiktoken.encoding_for_model(model)
+    except Exception:
+        return None
 
-    Unknown compatible providers do not share a guaranteed tokenizer. Counting
-    bytes avoids silently treating Chinese text as four characters per token.
-    """
-    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 64
+
+def tokens(value, model=None) -> int:
+    """Include serialized tool/message overhead; unknown tokenizers use UTF-8 bytes."""
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    encoder = tokenizer_for(model) if model else None
+    count = len(encoder.encode(text, disallowed_special=())) if encoder else len(text.encode("utf-8"))
+    return count + 64
 
 
 def tool_groups(messages):
@@ -66,9 +76,16 @@ class ContextManager:
         groups = tool_groups(messages)
         output_reserve = settings.max_output_tokens
         capacity = profile.get("context_capacity", 262144)
+
+        def count(value):
+            return tokens(value, profile["model"])
+
+        def summary_count(value):
+            return tokens(value, summary_profile["model"])
+
         margin = max(256, int(capacity * 0.05))
         available = capacity - output_reserve - margin
-        if available <= tokens([system, schemas]) + 256:
+        if available <= count([system, schemas]) + 256:
             raise ContextFailure("模型容量不足，请检查容量和输出预留配置")
 
         def assemble(summary, suffix):
@@ -79,7 +96,7 @@ class ContextManager:
 
         old_summary = prior.get("text", "") if prior else ""
         full = assemble(old_summary, messages)
-        initial = tokens(full) + tokens(schemas)
+        initial = count(full) + count(schemas)
         await emit(
             "context.usage",
             {
@@ -87,7 +104,9 @@ class ContextManager:
                 "capacity": capacity,
                 "available_input": available,
                 "source": profile.get("capacity_source", "default:256K"),
-                "estimator": "conservative_utf8_bytes",
+                "estimator": "tiktoken_with_overhead"
+                if tokenizer_for(profile["model"])
+                else "conservative_utf8_bytes",
                 "approximate": True,
             },
         )
@@ -109,12 +128,12 @@ class ContextManager:
             selected.append((group, group_rows))
         # Leave at least the newest complete block intact; extend suffix toward target.
         suffix_budget = (
-            available * settings.context_target - tokens([system, schemas]) - settings.summary_tokens * 4
+            available * settings.context_target - count([system, schemas]) - settings.summary_tokens * 4
         )
         retained = 0
         for group, group_rows in reversed(selected):
             is_pinned = any(row["id"] in pinned_ids for row in group_rows)
-            size = tokens(group)
+            size = count(group)
             if not kept or is_pinned or retained + size <= max(0, suffix_budget):
                 kept.insert(0, (group, group_rows))
                 retained += size
@@ -144,9 +163,9 @@ class ContextManager:
         chunks = []
         chunk, chunk_ids = [], []
         for group, group_rows in to_summarize:
-            if tokens([instruction, summary, group]) > chunk_budget:
+            if summary_count([instruction, summary, group]) > chunk_budget:
                 raise ContextFailure("完整工具步骤超过摘要模型容量，无法无损选择摘要边界")
-            if chunk and tokens([instruction, summary, chunk, group]) > chunk_budget:
+            if chunk and summary_count([instruction, summary, chunk, group]) > chunk_budget:
                 chunks.append((chunk, chunk_ids))
                 chunk, chunk_ids = [], []
             chunk.extend(group)
@@ -165,7 +184,7 @@ class ContextManager:
                     },
                 ]
                 if (
-                    tokens(prompt) + settings.summary_tokens + max(256, int(summary_capacity * 0.05))
+                    summary_count(prompt) + settings.summary_tokens + max(256, int(summary_capacity * 0.05))
                     > summary_capacity
                 ):
                     raise ContextFailure("摘要输入超过摘要模型容量，原历史未修改")
@@ -180,7 +199,7 @@ class ContextManager:
                 return full
             raise ContextFailure("上下文压缩失败，已保留原摘要及完整历史") from None
         result = assemble(summary, [row["message"] for row in rows if row["id"] in keep_ids])
-        final = tokens(result) + tokens(schemas)
+        final = count(result) + count(schemas)
         if final > available:
             raise ContextFailure("压缩后必要内容仍然超出容量，原摘要与历史未修改")
         await self.db.put(

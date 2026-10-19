@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.schemas import CalculatorArgs, TodoArgs, ToolCall
 from app.storage import Database
-from app.tools import ToolError, ToolRegistry, calculate, search, todo
+from app.tools import Tool, ToolError, ToolRegistry, calculate, search, todo
 
 
 @pytest.mark.parametrize(
@@ -73,3 +73,20 @@ async def test_todo_transaction_idempotency_user_isolation_and_version(tmp_path)
         assert (await db.get(key))["deleted"]
     finally:
         await db.close()
+
+
+async def test_registered_handler_executes_without_registry_branch_changes():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "echo",
+            "回显",
+            CalculatorArgs,
+            "parallel",
+            lambda args, db, owner, operation: {"text": args.expression},
+        )
+    )
+    result = await registry.execute(
+        ToolCall(id="echo1", name="echo", arguments='{"expression":"hello"}'), None, "A", "operation"
+    )
+    assert result == {"text": "hello"}

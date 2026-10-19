@@ -143,7 +143,7 @@ test("tool calls remain inline with assistant text and pair only their own resul
   assert.equal(rows[1].message.content, "a");
 });
 
-test("same-batch calls get separate cards and a later user message stays in sequence", () => {
+test("same-batch calls share one group and a later user message stays in sequence", () => {
   const call = (id) => ({ id, function: { name: id, arguments: "{}" } });
   const row = (id, message) => ({ id, run_id: "r", message });
   const items = conversationItems([
@@ -167,11 +167,27 @@ test("same-batch calls get separate cards and a later user message stays in sequ
   ]);
   assert.deepEqual(
     items.map((item) => item.id),
-    ["calls:search", "calls:calculator", "steering", "late"],
+    ["calls:search", "steering", "late"],
   );
   assert.equal(items[0].rows[1].id, "search-result");
-  assert.equal(items[1].rows[1].id, "calc-result");
-  assert.equal(items[3].rows.length, 1);
+  assert.equal(items[0].rows[3].id, "calc-result");
+  assert.equal(items[2].rows.length, 1);
+});
+
+test("consecutive tool rounds merge without crossing text or run boundaries", () => {
+  const rows = [];
+  for (let index = 0; index < 4; index++) {
+    const run_id = index === 3 ? "other" : "r";
+    if (index === 2) rows.push({id:"text",run_id,message:{role:"assistant",content:"下一步"}});
+    rows.push({id:`call-${index}`,run_id,message:{role:"assistant",content:null,
+      tool_calls:[{id:`c${index}`,function:{name:"calculator",arguments:"{}"}}]}});
+    rows.push({id:`result-${index}`,run_id,message:{role:"tool",tool_call_id:`c${index}`,content:'{"ok":true}'}});
+  }
+  const groups=conversationItems(rows);
+  assert.deepEqual(groups.map(item=>[item.kind,item.rows.length]),[
+    ["tools",4],["message",1],["tools",2],["tools",2],
+  ]);
+  assert.deepEqual(groups[0].rows.map(row=>row.id),["call-0","result-0","call-1","result-1"]);
 });
 
 test("context ring uses the post-compaction estimate until a newer usage sample", () => {

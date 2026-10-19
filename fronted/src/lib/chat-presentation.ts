@@ -105,7 +105,18 @@ export function conversationItems(messages: Message[]): ConversationItem[] {
       result.push(item);
     }
   }
-  return result;
+  const grouped: ConversationItem[] = [];
+  for (const item of result) {
+    const last = grouped[grouped.length - 1];
+    if (
+      item.kind === "tools" &&
+      last?.kind === "tools" &&
+      last.rows[0]?.run_id === item.rows[0]?.run_id
+    )
+      last.rows.push(...item.rows);
+    else grouped.push(item);
+  }
+  return grouped;
 }
 
 export function contextSnapshot(events: TraceEvent[]) {

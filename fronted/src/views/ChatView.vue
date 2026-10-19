@@ -44,11 +44,12 @@
           ><small>从零实现的 Agent Runtime</small>
         </div>
         <n-space
-          ><n-tag
-            :type="state.connected ? 'success' : 'warning'"
-            size="small"
-            >{{ state.connected ? "已连接" : "正在连接" }}</n-tag
-          >
+          ><ConnectionStatus
+            :connected="state.connected"
+            :connecting="state.connecting"
+            :settings-status="state.settingsStatus"
+            :model-issue="setupIssue"
+          />
           <n-button size="small" @click="traceOpen = true"
             >查看完整链路</n-button
           >
@@ -321,6 +322,7 @@ import {
 } from "@/api/harness";
 import type { Todo } from "@/types/harness";
 import ContextMeter from "@/components/ContextMeter.vue";
+import ConnectionStatus from "@/components/ConnectionStatus.vue";
 import ToolSteps from "@/components/ToolSteps.vue";
 import TracePanel from "@/components/TracePanel.vue";
 import {

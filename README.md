@@ -144,6 +144,8 @@ npm run build
 
 ## Git
 
+近期问题、原因、修复提交和验证边界汇总见 [Bug 修复与体验改进记录](dev_docs/bugfix_log.md)。
+
 `main` 保留原题与规划基线，`dev/runtime` 保存完整开发实现；每批验证后提交。GitHub 仓库为 [guangcheng_agent_harness](https://github.com/3027726980/guangcheng_agent_harness)，查看代码请使用 [dev/runtime 分支](https://github.com/3027726980/guangcheng_agent_harness/tree/dev/runtime)。推送须由用户明确授权，不自动合并 main 或强推；本地／远端状态以 `git status`、`git log --all --oneline` 和 `git ls-remote --heads origin` 为准。
 
 ## 来源与扩展

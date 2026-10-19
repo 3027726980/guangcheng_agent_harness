@@ -265,7 +265,7 @@
       <div v-if="!state.todos.length" class="todo-empty">
         还没有待办，试试让 Agent 帮你记录。
       </div>
-      <div v-for="todo in state.todos" :key="todo.id" class="todo-item">
+      <div v-for="todo in visibleTodos" :key="todo.id" class="todo-item">
         <n-checkbox
           class="todo-checkbox"
           :aria-label="`完成待办：${todo.title}`"
@@ -286,6 +286,17 @@
             ></n-space
           >
         </div>
+      </div>
+      <div v-if="state.todos.length" class="todo-pagination">
+        <span>共 {{ state.todos.length }} 条 · 每页 {{ todoPageSize }} 条</span>
+        <n-pagination
+          v-if="state.todos.length > todoPageSize"
+          v-model:page="todoPage"
+          :item-count="state.todos.length"
+          :page-size="todoPageSize"
+          simple
+          size="small"
+        />
       </div>
     </aside>
   </div>
@@ -336,6 +347,7 @@ import {
   NDrawerContent,
   NInput,
   NModal,
+  NPagination,
   NPopconfirm,
   NSpace,
   NTag,
@@ -379,6 +391,29 @@ const todoTitle = ref(""),
   editNotes = ref("");
 const editing = ref<Todo | null>(null),
   scrollArea = ref<HTMLElement | null>(null);
+const todoPage = ref(1);
+const todoPageSize = 5;
+const visibleTodos = computed(() =>
+  state.todos.slice(
+    (todoPage.value - 1) * todoPageSize,
+    todoPage.value * todoPageSize,
+  ),
+);
+watch(
+  () => state.todos.length,
+  (count) => {
+    todoPage.value = Math.min(
+      todoPage.value,
+      Math.max(1, Math.ceil(count / todoPageSize)),
+    );
+  },
+);
+watch(
+  () => state.user,
+  () => {
+    todoPage.value = 1;
+  },
+);
 const dismissedProblems = ref<string[]>([]);
 const problemStorageKey = () =>
   `harness-dismissed-runs:${state.user}:${state.selected}`;
@@ -841,6 +876,16 @@ small {
   color: #93a095;
   font-size: 12px;
   line-height: 1.8;
+}
+.todo-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  color: #829087;
+  font-size: 11px;
 }
 .todo-item {
   display: grid;

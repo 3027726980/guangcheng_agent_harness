@@ -45,7 +45,7 @@
         {{
           formatTokenCount(Math.max(0, capacity - used))
         }}
-        tokens（包含输出预留）
+        tokens（包含自动输出预留）
       </p>
       <n-button text type="primary" @click="showSummary">查看历史摘要</n-button>
     </div>

@@ -162,7 +162,8 @@
         </div>
         <n-alert type="info" :show-icon="false" style="margin-bottom: 20px"
           >摘要和重试计入模型调用预算，等待时间计入总时长。达到硬限制不会额外调用模型收尾。Context
-          按容量的触发比例压缩，完整历史仍保留。</n-alert
+          按容量的触发比例压缩，完整历史仍保留。对话输出上限使用供应商默认值，Context
+          预留与摘要预算自动管理。</n-alert
         >
         <n-button type="primary" :loading="saving" @click="saveSettings"
           >保存全局运行设置</n-button
@@ -271,18 +272,6 @@ const fields = [
     label: "只读工具并行上限",
     min: 1,
     help: "默认4；含待办的批次串行",
-  },
-  {
-    key: "max_output_tokens",
-    label: "单次输出预留 / tokens",
-    min: 64,
-    help: "默认2000，计入容量检查",
-  },
-  {
-    key: "summary_tokens",
-    label: "摘要输出上限 / tokens",
-    min: 64,
-    help: "默认1000，需要实际检验信息保留效果",
   },
   {
     key: "context_trigger",

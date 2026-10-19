@@ -19,8 +19,6 @@ const profile = {
 const settings = {
   default_profile_id: "p",
   summary_profile_id: null,
-  max_output_tokens: 2000,
-  summary_tokens: 1000,
 };
 
 test("session activity survives another run finishing and stays isolated across sessions", () => {
@@ -84,11 +82,14 @@ test("send readiness rejects missing, untested, incomplete and oversized configu
   );
   assert.match(
     configurationIssue("ready", settings, [
-      { ...profile, context_capacity: 2048 },
+      { ...profile, context_capacity: 512 },
     ]),
     /容量不足/,
   );
   assert.equal(configurationIssue("ready", settings, [profile]), "");
+  assert.equal(configurationIssue("ready", settings, [
+    { ...profile, context_capacity: 2048 },
+  ]), "");
 });
 
 test("tool calls remain inline with assistant text and pair only their own results", () => {

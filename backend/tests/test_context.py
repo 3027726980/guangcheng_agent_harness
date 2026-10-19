@@ -45,7 +45,7 @@ async def test_compaction_coverage_and_pinned_request(tmp_path):
         async def summary(profile, messages, max_tokens):
             return ModelReply(text="历史目标：学习计划；操作均未写入待办。")
 
-        settings = RuntimeSettings(max_output_tokens=64, summary_tokens=64)
+        settings = RuntimeSettings()
         result = await ContextManager(db).build(
             "s",
             "current",
@@ -81,7 +81,7 @@ async def test_summary_failure_keeps_original_and_stops_when_over_limit(tmp_path
             await ContextManager(db).build(
                 "s",
                 "current",
-                RuntimeSettings(max_output_tokens=64, summary_tokens=64),
+                RuntimeSettings(),
                 {"model": "x", "context_capacity": 6000},
                 {"model": "x", "context_capacity": 16000},
                 [],
@@ -108,7 +108,7 @@ async def test_smaller_summary_model_preserves_still_fitting_original(tmp_path):
         await setup(db)
         messages = [row["message"] for row in await db.list("message", parent="s")]
         initial = tokens([{"role": "system", "content": "系统"}] + messages) + tokens([])
-        capacity = int((initial + 64) / (0.95 * 0.9)) + 256
+        capacity = int(initial / (0.85 * 0.9)) + 256
         events = []
 
         async def emit(kind, data):
@@ -120,7 +120,7 @@ async def test_smaller_summary_model_preserves_still_fitting_original(tmp_path):
         result = await ContextManager(db).build(
             "s",
             "current",
-            RuntimeSettings(max_output_tokens=64, summary_tokens=64),
+            RuntimeSettings(),
             {"model": "unknown", "context_capacity": capacity},
             {"model": "unknown", "context_capacity": 2000},
             [],
@@ -150,7 +150,7 @@ async def test_cancelled_summary_does_not_update_coverage(tmp_path):
             await ContextManager(db).build(
                 "s",
                 "current",
-                RuntimeSettings(max_output_tokens=64, summary_tokens=64),
+                RuntimeSettings(),
                 {"model": "unknown", "context_capacity": 6000},
                 {"model": "unknown", "context_capacity": 16000},
                 [],

@@ -18,12 +18,18 @@ class RuntimeSettings(StrictModel):
     retries: int = Field(default=3, ge=0, le=20)
     retry_seconds: float = Field(default=30.0, ge=0, le=3600)
     tool_concurrency: int = Field(default=4, ge=1, le=32)
-    max_output_tokens: int = Field(default=2000, ge=64, le=131072)
-    summary_tokens: int = Field(default=1000, ge=64, le=32768)
     context_trigger: float = Field(default=0.8, gt=0, lt=1)
     context_target: float = Field(default=0.5, gt=0, lt=1)
     default_profile_id: str | None = None
     summary_profile_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_output_settings(cls, data):
+        # Accept old database rows / clients without retaining obsolete fixed caps.
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k not in {"max_output_tokens", "summary_tokens"}}
+        return data
 
     @model_validator(mode="after")
     def validate_watermarks(self):

@@ -11,6 +11,7 @@ from app.context import ContextFailure, ContextManager
 from app.llm import ModelFailure, OpenAIModel
 from app.schemas import RuntimeSettings
 from app.storage import Database, uid
+from app.token_budget import output_reserve
 from app.tools import ToolError, ToolRegistry
 
 TERMINAL = {"completed", "cancelled", "failed", "interrupted", "limited"}
@@ -130,10 +131,10 @@ class Runtime:
                 raise DomainError(f"请先在全局设置中配置并选择{label}模型", 409)
             if profile.get("test_status") != "connected":
                 raise DomainError(f"{label}模型连接测试未通过，请在全局设置中重新测试", 409)
-            output = settings.max_output_tokens if label == "对话" else settings.summary_tokens
+            output = output_reserve(profile)
             capacity = profile.get("context_capacity", 262144)
             if capacity <= output + max(256, int(capacity * 0.05)) + 256:
-                raise DomainError(f"{label}模型容量不足，请调整输出上限或模型配置", 409)
+                raise DomainError(f"{label}模型容量不足，请检查模型容量配置", 409)
             profiles.append(profile)
         return profiles
 
@@ -453,7 +454,7 @@ class Runtime:
                         profile,
                         messages,
                         self.registry.schemas(),
-                        settings.max_output_tokens,
+                        None,
                         True,
                     )
                     if run.get("reason"):

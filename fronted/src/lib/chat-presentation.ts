@@ -40,12 +40,11 @@ export function configurationIssue(
   if (status === "loading") return "正在读取模型与运行配置，请稍候。";
   if (status !== "ready")
     return "未能读取运行配置，请重试或前往全局设置检查连接。";
-  for (const [label, id, output] of [
-    ["对话", settings.default_profile_id, settings.max_output_tokens],
+  for (const [label, id] of [
+    ["对话", settings.default_profile_id],
     [
       "摘要",
       settings.summary_profile_id || settings.default_profile_id,
-      settings.summary_tokens,
     ],
   ] as const) {
     const profile = profiles.find((item) => item.id === id);
@@ -54,14 +53,13 @@ export function configurationIssue(
       return `${label}模型缺少地址或模型 ID，请补全配置。`;
     if (profile.test_status !== "connected")
       return `${label}模型连接测试未通过，请重新测试。`;
-    if (!Number.isFinite(output) || output < 1)
-      return `请先设置${label}模型的输出上限。`;
     const capacity = profile.context_capacity;
+    const output = Math.max(64, Math.floor(capacity * 0.1));
     if (
       !Number.isFinite(capacity) ||
       capacity <= output + Math.max(256, Math.floor(capacity * 0.05)) + 256
     )
-      return `${label}模型容量不足，请调整输出上限或模型配置。`;
+      return `${label}模型容量不足，请检查模型容量配置。`;
   }
   return "";
 }

@@ -127,6 +127,31 @@ async def test_completion_token_parameter_and_reasoning_configuration():
     assert reply.text == "OK"
 
 
+async def test_answer_can_use_provider_default_output_and_report_actual_usage():
+    def respond(request):
+        payload = json.loads(request.content)
+        assert "max_tokens" not in payload
+        assert "max_completion_tokens" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "id": "test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fixture",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "OK"}}
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 7, "total_tokens": 27},
+            },
+        )
+
+    reply = await OpenAIModel(httpx.MockTransport(respond)).complete(
+        PROFILE, [{"role": "user", "content": "x"}], None, None, 5
+    )
+    assert reply.usage["completion_tokens"] == 7
+
+
 @pytest.mark.parametrize("capacity,source", [(8192, "provider:context_length"), (None, "default:256K")])
 async def test_profile_probe_reads_capacity_or_falls_back(capacity, source):
     def respond(request):

@@ -29,7 +29,7 @@ class OpenAIModel:
         profile: dict,
         messages: list[dict],
         tools: list[dict] | None,
-        max_tokens: int,
+        max_tokens: int | None,
         timeout: float,
         on_text: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelReply:
@@ -48,7 +48,8 @@ class OpenAIModel:
                 }
                 if tools:
                     kwargs["tools"] = tools
-                kwargs[profile.get("output_token_parameter", "max_tokens")] = max_tokens
+                if max_tokens is not None:
+                    kwargs[profile.get("output_token_parameter", "max_tokens")] = max_tokens
                 if profile.get("reasoning_effort"):
                     kwargs["reasoning_effort"] = profile["reasoning_effort"]
                 response = await client.chat.completions.create(**kwargs)

@@ -253,7 +253,7 @@ async def test_invalid_configuration_rejected_before_queueing(harness, problem):
         settings["summary_profile_id"] = "not-present"
     else:
         profile = await rt.db.get("profile")
-        profile.update({"test_status": "failed"} if problem == "failed" else {"context_capacity": 2048})
+        profile.update({"test_status": "failed"} if problem == "failed" else {"context_capacity": 512})
         await rt.db.put("profile", profile)
     await rt.db.put("settings", {"id": "runtime-settings", **settings})
     with pytest.raises(DomainError) as error:

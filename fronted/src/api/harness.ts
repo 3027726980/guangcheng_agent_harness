@@ -42,6 +42,13 @@ const disconnectedNotice =
   "连接已断开，当前执行和排队消息会被取消；重新连接不会自动重跑。";
 let sessionsRequest = 0;
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T = any>(
   path: string,
   method = "GET",
@@ -61,10 +68,11 @@ export async function api<T = any>(
     const error = await response
       .json()
       .catch(() => ({ detail: `HTTP ${response.status}` }));
-    throw new Error(
+    throw new ApiError(
       typeof error.detail === "string"
         ? error.detail
         : JSON.stringify(error.detail),
+      response.status,
     );
   }
   return response.json();

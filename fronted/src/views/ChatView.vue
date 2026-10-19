@@ -159,7 +159,12 @@
         <template v-if="queued.length">
           <strong>等待执行 {{ queued.length }} 条</strong>
           <div v-for="run in queued" :key="run.id" class="queue-row">
-            <div class="queue-content">{{ run.content }}</div>
+            <div class="queue-content">
+              {{ run.content }}
+              <small v-if="steeringErrors[run.id]" class="queue-error" role="alert">
+                {{ steeringErrors[run.id] }}
+              </small>
+            </div>
             <div class="queue-actions">
               <n-button
                 size="tiny"
@@ -353,6 +358,7 @@ import {
   NTag,
 } from "naive-ui";
 import {
+  ApiError,
   api,
   boot,
   changeTodo,
@@ -392,6 +398,13 @@ const todoTitle = ref(""),
 const editing = ref<Todo | null>(null),
   scrollArea = ref<HTMLElement | null>(null);
 const todoPage = ref(1);
+const steeringErrors = ref<Record<string, string>>({});
+watch(
+  () => [state.user, state.selected],
+  () => {
+    steeringErrors.value = {};
+  },
+);
 const todoPageSize = 5;
 const visibleTodos = computed(() =>
   state.todos.slice(
@@ -542,8 +555,16 @@ async function promoteQueued(id: string) {
   )
     return;
   promoting.value = id;
+  const session = state.selected;
+  delete steeringErrors.value[id];
   try {
-    await safely(() => api(`/runs/${id}/steer-queued`, "POST"));
+    await api(`/runs/${id}/steer-queued`, "POST");
+  } catch (error) {
+    if (state.selected !== session) return;
+    steeringErrors.value[id] =
+      error instanceof ApiError && [404, 405].includes(error.status)
+        ? "引导未生效：后端接口不可用，请重启后端加载最新代码后重试；原消息仍在队列中。"
+        : `引导未生效：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     promoting.value = "";
   }
@@ -948,6 +969,12 @@ small {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+.queue-error {
+  display: block;
+  margin-top: 4px;
+  color: #b14335;
+  line-height: 1.6;
 }
 .steering-row {
   color: #497d75;

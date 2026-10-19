@@ -207,13 +207,28 @@
       <n-input
         v-model:value="todoTitle"
         placeholder="新增待办标题"
+        :input-props="{ 'aria-label': '新增待办标题' }"
+        :maxlength="200"
+        :disabled="todoSaving"
         @keyup.enter="addTodo"
+      />
+      <n-input
+        v-model:value="todoNotes"
+        type="textarea"
+        placeholder="待办内容（可选）"
+        :input-props="{ 'aria-label': '待办内容' }"
+        :autosize="{ minRows: 2, maxRows: 5 }"
+        :maxlength="4000"
+        :disabled="todoSaving"
+        show-count
+        class="todo-content-input"
       />
       <n-button
         block
         secondary
         type="primary"
-        :disabled="!todoTitle.trim()"
+        :disabled="!todoTitle.trim() || todoSaving"
+        :loading="todoSaving"
         @click="addTodo"
         >添加待办</n-button
       >
@@ -262,10 +277,16 @@
     style="width: min(460px, 95vw)"
   >
     <n-space vertical
-      ><n-input v-model:value="editTitle" placeholder="标题" /><n-input
+      ><n-input
+        v-model:value="editTitle"
+        placeholder="标题"
+        :maxlength="200"
+      /><n-input
         v-model:value="editNotes"
         type="textarea"
-        placeholder="备注"
+        placeholder="内容（可选）"
+        :input-props="{ 'aria-label': '编辑待办内容' }"
+        :maxlength="4000"
       /><n-button type="primary" @click="saveTodo">保存修改</n-button></n-space
     >
   </n-modal>
@@ -315,6 +336,8 @@ const input = ref(""),
   todosOpen = ref(true),
   summaryOpen = ref(false);
 const todoTitle = ref(""),
+  todoNotes = ref(""),
+  todoSaving = ref(false),
   editOpen = ref(false),
   editTitle = ref(""),
   editNotes = ref("");
@@ -427,11 +450,21 @@ function stop() {
     void safely(() => api(`/runs/${activeRun.value!.id}/cancel`, "POST"));
 }
 async function addTodo() {
-  if (!todoTitle.value.trim()) return;
-  await safely(async () => {
-    await changeTodo({ action: "add", title: todoTitle.value.trim() });
-    todoTitle.value = "";
-  });
+  if (!todoTitle.value.trim() || todoSaving.value) return;
+  todoSaving.value = true;
+  try {
+    await safely(async () => {
+      await changeTodo({
+        action: "add",
+        title: todoTitle.value.trim(),
+        notes: todoNotes.value.trim(),
+      });
+      todoTitle.value = "";
+      todoNotes.value = "";
+    });
+  } finally {
+    todoSaving.value = false;
+  }
 }
 function toggleTodo(todo: Todo, checked: boolean) {
   void safely(async () => {
@@ -690,6 +723,9 @@ small {
 .todo-panel > .n-button {
   margin-top: 8px;
 }
+.todo-content-input {
+  margin-top: 8px;
+}
 .todo-empty {
   padding: 30px 5px;
   color: #93a095;
@@ -708,6 +744,7 @@ small {
   font-size: 13px;
 }
 .todo-item p {
+  white-space: pre-wrap;
   color: #829087;
   font-size: 11px;
   margin: 6px 0;

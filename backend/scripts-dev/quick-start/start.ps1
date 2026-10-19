@@ -2,7 +2,8 @@
 param(
     [ValidateSet('All', 'Backend', 'Frontend')]
     [string]$Target = 'All',
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$Restart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,35 @@ $frontendRoot = Join-Path $projectRoot 'fronted'
 $pythonPath = Join-Path $backendRoot '.venv\Scripts\python.exe'
 $needsBackend = $Target -in @('All', 'Backend')
 $needsFrontend = $Target -in @('All', 'Frontend')
+
+function Get-ProjectListener {
+    param([int]$Port)
+    $projectPattern = [regex]::Escape($projectRoot.Replace('/', '\')) + '(?=[\\/"\s]|$)'
+    foreach ($listener in @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) {
+        $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction Stop
+        if (-not $listenerProcess) { throw "Cannot inspect listener on port $Port." }
+        $expected = if ($Port -eq 8000) {
+            $listenerProcess.Name -eq 'python.exe' -and $listenerProcess.CommandLine -match 'uvicorn\s+app\.main:app'
+        } else {
+            $listenerProcess.Name -eq 'node.exe' -and $listenerProcess.CommandLine -match 'vite'
+        }
+        if (-not $expected) { throw "Port $Port belongs to another service. No processes stopped." }
+        $ancestor = $listenerProcess
+        $owned = $false
+        for ($depth = 0; $depth -lt 6 -and $ancestor; $depth++) {
+            if ($ancestor.CommandLine.Replace('/', '\') -match $projectPattern) {
+                $owned = $true
+                break
+            }
+            if (-not $ancestor.ParentProcessId) { break }
+            $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId=$($ancestor.ParentProcessId)" -ErrorAction Stop
+        }
+        if (-not $owned) {
+            throw "Cannot verify project ownership of port $Port. Stop that service manually. No processes stopped."
+        }
+        [pscustomobject]@{ Port = $Port; ProcessId = $listenerProcess.ProcessId; Created = $listenerProcess.CreationDate }
+    }
+}
 
 try {
     if ($needsBackend) {
@@ -48,16 +78,47 @@ try {
     if ($needsBackend) { $requiredPorts += 8000 }
     if ($needsFrontend) { $requiredPorts += 5173 }
     $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    $restartListeners = @()
     foreach ($port in $requiredPorts) {
         if (@($listeners | Where-Object { $_.Port -eq $port }).Count -gt 0) {
-            throw "Port $port is already listening. Stop the existing service before starting another instance."
+            if (-not $Restart) {
+                throw "Port $port is already listening. Stop the existing service or use restart.bat."
+            }
+            $verified = @(Get-ProjectListener -Port $port)
+            if (-not $verified.Count) { throw "Port $port changed while checking. Retry." }
+            $restartListeners += $verified
         }
     }
-    Write-Host "[OK] Required ports available: $($requiredPorts -join ', ')." -ForegroundColor Green
+    Write-Host "[OK] Required ports checked: $($requiredPorts -join ', ')." -ForegroundColor Green
 
     if ($CheckOnly) {
-        Write-Host '[OK] Startup checks passed. No services started.'
+        if ($Restart) {
+            foreach ($item in $restartListeners) { Write-Host "[CHECK] Would stop project listener PID $($item.ProcessId) on port $($item.Port)." }
+        }
+        Write-Host '[OK] Checks passed. No services stopped or started.'
         exit 0
+    }
+
+    if ($Restart) {
+        # Validate every target before stopping any of them, including PID reuse.
+        foreach ($item in $restartListeners) {
+            $current = @(Get-ProjectListener -Port $item.Port)
+            if (-not ($current | Where-Object { $_.ProcessId -eq $item.ProcessId -and $_.Created -eq $item.Created })) {
+                throw 'Listener changed after preflight. Retry. No processes stopped.'
+            }
+        }
+        Write-Host '[RESTART] Running and queued tasks will be interrupted.' -ForegroundColor Yellow
+        foreach ($item in @($restartListeners | Sort-Object ProcessId -Unique)) {
+            Stop-Process -Id $item.ProcessId -ErrorAction Stop
+            Write-Host "[STOP] Project listener PID $($item.ProcessId) on port $($item.Port)."
+        }
+        $stopDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        do {
+            $remaining = @([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -in $requiredPorts })
+            if (-not $remaining.Count) { break }
+            if ([DateTime]::UtcNow -ge $stopDeadline) { throw 'Ports did not become available after stopping. Check existing service windows.' }
+            Start-Sleep -Milliseconds 100
+        } while ($true)
     }
 
     if ($Target -eq 'All') {

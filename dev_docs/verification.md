@@ -96,6 +96,12 @@ Context 单位显示：设置页、容量浮层和链路摘要统一采用千进
 
 沿用此前后端重启授权，确认实际服务无运行或排队任务后重启，读取 OpenAPI 确认新增 POST `/api/sessions/{session_id}/compact` 已加载。本次未主动调用真实模型或触发实际会话压缩。
 
+## Windows 快速重启入口
+
+新增 `backend/scripts-dev/quick-start/restart.bat`，复用 start.ps1 的依赖检查和启动流程，默认重启前后端，PowerShell 支持 `-Target Backend|Frontend -Restart`。停止前核对端口监听程序、项目路径（允许从父进程确认虚拟环境路径）及进程创建时间；全部目标核实通过才执行停止，最多等待 10 秒释放端口，不终止未知归属进程。`--check`／`-Restart -CheckOnly` 只检查，不停止或启动服务。
+
+PowerShell 解析通过；Windows PowerShell 运行全量重启预检通过，从项目外临时目录调用 restart.bat --check 通过，前后监听 PID 保持不变。使用模拟其他项目的 Vite 监听进程确认归属检查返回失败且拒绝执行。未实际执行新增脚本的停止／启动分支，未调用模型。
+
 ## 真实模型验收步骤
 
 获授权启动服务后，按 README 配置连接并保存；这一步会真实发出模型请求。建议按下面顺序检查：

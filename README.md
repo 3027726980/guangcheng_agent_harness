@@ -10,13 +10,14 @@
 
 ### Windows 快速启动
 
-参考 Pin 的 `backend/scripts-dev/quick-start`，本项目提供相同的三个双击入口：
+参考 Pin 的 `backend/scripts-dev/quick-start`，本项目提供以下双击入口：
 
 - [main.bat](backend/scripts-dev/quick-start/main.bat)：同时打开后端和前端 PowerShell 窗口。
 - [backend.bat](backend/scripts-dev/quick-start/backend.bat)：只启动后端。
 - [frontend.bat](backend/scripts-dev/quick-start/frontend.bat)：只启动前端（项目目录仍为 `fronted`）。
+- [restart.bat](backend/scripts-dev/quick-start/restart.bat)：检查依赖与进程归属，停止本项目旧服务并重新打开前后端窗口；会中断运行及排队任务。
 
-首次使用先按下方命令安装依赖，之后双击入口即可。脚本自动定位项目根目录，检查虚拟环境、依赖、Node 版本和端口，不自动安装依赖或终止已有进程。8000／5173 被占用时会明确报错。
+首次使用先按下方命令安装依赖，之后双击入口即可。脚本自动定位项目根目录，检查虚拟环境、依赖、Node 版本和端口，不自动安装依赖。普通启动入口遇到占用的 8000／5173 端口时会明确报错；重启入口只停止已核实属于本项目的监听进程，无法核实或属于其他程序时拒绝执行，两个服务都核实后才开始停止。
 
 也可以在 PowerShell 中仅做启动前检查，不启动服务：
 
@@ -24,7 +25,7 @@
 & 'D:\MyProject\guangcheng_agent_harness\backend\scripts-dev\quick-start\main.bat' --check
 ```
 
-三个入口均支持 `--check`；底层逻辑为同目录 `start.ps1`，可直接使用 `-Target All|Backend|Frontend -CheckOnly`。实际启动后，等待两个窗口显示就绪信息，访问 `http://127.0.0.1:5173`。停止时在各服务窗口按 `Ctrl+C`。脚本本身不调用模型，保存模型配置／发起聊天时才会调用。
+四个入口均支持 `--check`，不会停止或启动服务；`restart.bat --check` 会列出待停止的本项目监听进程。底层逻辑为同目录 `start.ps1`，可直接使用 `-Target All|Backend|Frontend -CheckOnly`。单独重启后端可运行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File backend/scripts-dev/quick-start/start.ps1 -Target Backend -Restart`；前端将 Target 改为 Frontend。实际启动后，等待两个窗口显示就绪信息，访问 `http://127.0.0.1:5173`。停止时在各服务窗口按 `Ctrl+C`。脚本本身不调用模型，保存模型配置／发起聊天时才会调用。
 
 ### 手动安装与启动
 

@@ -87,6 +87,9 @@
       <n-alert
         v-if="summaryOpen"
         type="info"
+        title="历史摘要"
+        closable
+        @close="summaryOpen = false"
         :show-icon="false"
         class="summary-box"
         >{{
@@ -192,7 +195,7 @@
               :usage="contextUsage"
               :capacity="selectedProfile?.context_capacity || 0"
               :source="selectedProfile?.capacity_source || ''"
-              @summary="summaryOpen = !summaryOpen"
+              @summary="summaryOpen = true"
             />
             <n-button
               type="primary"
@@ -526,6 +529,12 @@ async function saveTodo() {
     }
   });
 }
+watch(
+  () => state.selected,
+  () => {
+    summaryOpen.value = false;
+  },
+);
 watch(
   () => [
     state.messages.length,

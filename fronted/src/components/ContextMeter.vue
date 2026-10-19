@@ -1,5 +1,5 @@
 <template>
-  <n-popover trigger="click" placement="top-end">
+  <n-popover v-model:show="detailsOpen" trigger="click" placement="top-end">
     <template #trigger>
       <button
         type="button"
@@ -44,22 +44,25 @@
       <p v-if="known">
         约剩余 {{ format(Math.max(0, capacity - used)) }} tokens（包含输出预留）
       </p>
-      <n-button text type="primary" @click="$emit('summary')"
-        >查看历史摘要</n-button
-      >
+      <n-button text type="primary" @click="showSummary">查看历史摘要</n-button>
     </div>
   </n-popover>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { NButton, NPopover } from "naive-ui";
 const props = defineProps<{
   usage?: Record<string, any>;
   capacity: number;
   source: string;
 }>();
-defineEmits<{ summary: [] }>();
+const emit = defineEmits<{ summary: [] }>();
+const detailsOpen = ref(false);
+function showSummary() {
+  detailsOpen.value = false;
+  emit("summary");
+}
 const capacity = computed(() =>
   Number(props.usage?.capacity ?? props.capacity),
 );

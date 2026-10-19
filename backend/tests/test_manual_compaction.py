@@ -114,7 +114,8 @@ async def test_reasoning_summary_uses_provider_default_instead_of_text_target_ca
     run = await compact(rt, client, session)
     result = await terminal(rt, run["id"])
     assert result["status"] == "completed" and result["compaction_result"] == "compacted"
-    assert "摘要正文目标" in payloads[0]["messages"][0]["content"]
+    assert "tokens" not in payloads[0]["messages"][0]["content"]
+    assert "正文目标" not in payloads[0]["messages"][0]["content"]
     assert "max_tokens" not in payloads[0] and "max_completion_tokens" not in payloads[0]
     assert len(payloads) == 1
     assert await rt.db.list("message", parent=session["id"]) == original

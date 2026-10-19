@@ -163,7 +163,7 @@
         <n-alert type="info" :show-icon="false" style="margin-bottom: 20px"
           >摘要和重试计入模型调用预算，等待时间计入总时长。达到硬限制不会额外调用模型收尾。Context
           按容量的触发比例压缩，完整历史仍保留。对话输出上限使用供应商默认值，Context
-          预留与摘要预算自动管理。</n-alert
+          预留自动管理，摘要长度由模型决定。</n-alert
         >
         <n-button type="primary" :loading="saving" @click="saveSettings"
           >保存全局运行设置</n-button

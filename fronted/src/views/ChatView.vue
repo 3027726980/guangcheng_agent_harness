@@ -17,6 +17,13 @@
         >
           {{ session.title }}<small>{{ session.id.slice(0, 8) }}</small>
         </button>
+        <span
+          v-if="sessionActivityLabel(session)"
+          class="session-spinner"
+          role="status"
+          :aria-label="`${session.title}：${sessionActivityLabel(session)}`"
+          :title="sessionActivityLabel(session)"
+        />
         <n-popconfirm
           @positive-click="safely(() => deleteSession(session.id))"
           positive-text="删除"
@@ -329,6 +336,7 @@ import {
   configurationIssue,
   contextSnapshot,
   conversationItems,
+  sessionActivityLabel,
 } from "@/lib/chat-presentation";
 
 const router = useRouter();
@@ -590,6 +598,26 @@ watch(
 .session-delete:hover {
   background: #f5e9e4;
   color: #a65d46;
+}
+.session-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #cfdfd4;
+  border-top-color: #358160;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-right: 5px;
+  animation: session-loading 0.8s linear infinite;
+}
+@keyframes session-loading {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-spinner {
+    animation: none;
+  }
 }
 .setup-alert {
   margin: 12px 20px 0;

@@ -5,6 +5,8 @@ import {
   conversationItems,
   contextSnapshot,
   traceSteps,
+  updateSessionActivity,
+  sessionActivityLabel,
 } from "../src/lib/chat-presentation.ts";
 
 const profile = {
@@ -20,6 +22,43 @@ const settings = {
   max_output_tokens: 2000,
   summary_tokens: 1000,
 };
+
+test("session activity survives another run finishing and stays isolated across sessions", () => {
+  const sessions = [
+    { id: "a" },
+    { id: "b", active_runs: [{ id: "other", status: "running" }] },
+  ];
+  updateSessionActivity(sessions, {
+    id: "first",
+    session_id: "a",
+    status: "running",
+  });
+  updateSessionActivity(sessions, {
+    id: "next",
+    session_id: "a",
+    status: "queued",
+  });
+  assert.match(sessionActivityLabel(sessions[0]), /执行中，1 条排队/);
+  updateSessionActivity(sessions, {
+    id: "first",
+    session_id: "a",
+    status: "completed",
+  });
+  assert.equal(sessionActivityLabel(sessions[0]), "1 条任务排队中");
+  updateSessionActivity(sessions, {
+    id: "next",
+    session_id: "a",
+    status: "cancelling",
+  });
+  assert.equal(sessionActivityLabel(sessions[0]), "正在停止任务");
+  updateSessionActivity(sessions, {
+    id: "next",
+    session_id: "a",
+    status: "cancelled",
+  });
+  assert.equal(sessionActivityLabel(sessions[0]), "");
+  assert.equal(sessionActivityLabel(sessions[1]), "任务执行中");
+});
 
 test("send readiness rejects missing, untested, incomplete and oversized configuration", () => {
   assert.match(configurationIssue("loading", settings, [profile]), /正在读取/);

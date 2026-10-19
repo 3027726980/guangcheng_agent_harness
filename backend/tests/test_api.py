@@ -118,3 +118,48 @@ async def test_sse_disconnect_cancels_owned_active_and_queued_runs(harness, tmp_
         assert (await terminal(rt, active["id"]))["status"] == "cancelled"
         assert (await terminal(rt, queued["id"]))["status"] == "cancelled"
         assert client.closed
+
+
+def test_session_list_reports_only_owned_pending_runs(tmp_path):
+    app = create_app(str(tmp_path / "activity.db"), ProbeModel([]))
+    with TestClient(app) as client:
+        first = client.post("/api/sessions", json={"title": "窗口一"}).json()
+        second = client.post("/api/sessions", json={"title": "窗口二"}).json()
+        other = client.post("/api/sessions", json={"title": "B"}, headers={"X-Demo-User": "B"}).json()
+        for index, status in enumerate(
+            ("queued", "running", "cancelling", "completed", "failed", "cancelled", "limited", "interrupted")
+        ):
+            client.portal.call(
+                app.state.runtime.db.put,
+                "run",
+                {
+                    "id": f"run-{index}",
+                    "session_id": first["id"],
+                    "status": status,
+                    "private_payload": "must-not-appear",
+                },
+                "A",
+                first["id"],
+            )
+        client.portal.call(
+            app.state.runtime.db.put,
+            "run",
+            {
+                "id": "run-b",
+                "session_id": other["id"],
+                "status": "running",
+            },
+            "B",
+            other["id"],
+        )
+        listed = client.get("/api/sessions").json()
+        assert listed[0]["active_runs"] == [
+            {"id": "run-0", "status": "queued"},
+            {"id": "run-1", "status": "running"},
+            {"id": "run-2", "status": "cancelling"},
+        ]
+        assert listed[1]["id"] == second["id"] and listed[1]["active_runs"] == []
+        assert "private_payload" not in str(listed) and "run-b" not in str(listed)
+        assert client.get("/api/sessions", headers={"X-Demo-User": "B"}).json()[0]["active_runs"] == [
+            {"id": "run-b", "status": "running"}
+        ]

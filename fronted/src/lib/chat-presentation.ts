@@ -1,4 +1,36 @@
-import type { Message, Profile, TraceEvent } from "../types/harness";
+import type {
+  Message,
+  Profile,
+  Session,
+  Run,
+  TraceEvent,
+} from "../types/harness";
+
+export function updateSessionActivity(
+  sessions: Session[],
+  run: Pick<Run, "id" | "session_id" | "status">,
+) {
+  const session = sessions.find((item) => item.id === run.session_id);
+  if (!session) return;
+  const active = (session.active_runs || []).filter(
+    (item) => item.id !== run.id,
+  );
+  if (["queued", "running", "cancelling"].includes(run.status))
+    active.push({ id: run.id, status: run.status });
+  session.active_runs = active;
+}
+
+export function sessionActivityLabel(session: Session) {
+  const runs = session.active_runs || [];
+  if (runs.some((run) => run.status === "cancelling")) return "正在停止任务";
+  const running = runs.filter((run) => run.status === "running").length;
+  const queued = runs.filter((run) => run.status === "queued").length;
+  return running
+    ? `任务执行中${queued ? `，${queued} 条排队` : ""}`
+    : queued
+      ? `${queued} 条任务排队中`
+      : "";
+}
 
 export function configurationIssue(
   status: string,

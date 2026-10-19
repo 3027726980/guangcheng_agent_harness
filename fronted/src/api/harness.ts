@@ -1,6 +1,9 @@
 import { reactive } from "vue";
 import { SSEParser } from "@/lib/sse";
-import { configurationIssue } from "@/lib/chat-presentation";
+import {
+  configurationIssue,
+  updateSessionActivity,
+} from "@/lib/chat-presentation";
 import type {
   Message,
   Profile,
@@ -34,6 +37,8 @@ let controller: AbortController | undefined;
 let generation = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 const deletionRefreshes = new Map<string, Promise<void>>();
+const sessionSnapshots = new Set<Run[]>();
+let sessionsRequest = 0;
 
 export async function api<T = any>(
   path: string,
@@ -72,7 +77,19 @@ export async function safely(action: () => Promise<unknown>) {
 }
 
 export async function loadSessions() {
-  state.sessions = await api("/sessions");
+  const request = ++sessionsRequest;
+  const epoch = generation;
+  const updates: Run[] = [];
+  sessionSnapshots.add(updates);
+  try {
+    const sessions = await api<Session[]>("/sessions");
+    if (request !== sessionsRequest || epoch !== generation) return;
+    // Events received while fetching must win over an older HTTP snapshot.
+    for (const run of updates) updateSessionActivity(sessions, run);
+    state.sessions = sessions;
+  } finally {
+    sessionSnapshots.delete(updates);
+  }
 }
 export async function loadTodos() {
   state.todos = (await api("/todos")).items;
@@ -144,6 +161,11 @@ export async function newSession() {
 }
 
 function receive(event: TraceEvent) {
+  if (event.type === "run.updated") {
+    const run = event.data as unknown as Run;
+    for (const updates of sessionSnapshots) updates.push(run);
+    updateSessionActivity(state.sessions, run);
+  }
   if (event.type === "todo.changed") void safely(loadTodos);
   if (event.type === "session.created") void safely(loadSessions);
   if (event.type === "session.deleted") {
@@ -219,6 +241,7 @@ async function connect(epoch: number) {
         if (frame.event === "ready") {
           state.connected = true;
           state.connecting = false;
+          await loadSessions();
           if (state.selected) await selectSession(state.selected);
         } else if (frame.data) receive(JSON.parse(frame.data));
       }

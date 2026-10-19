@@ -126,7 +126,12 @@ def create_app(database_path=None, model=None):
 
     @app.get("/api/sessions")
     async def sessions(owner=Depends(user)):
-        return [item for item in await runtime.db.list("session", owner=owner) if not item.get("deleted")]
+        items = [item for item in await runtime.db.list("session", owner=owner) if not item.get("deleted")]
+        active = {item["id"]: [] for item in items}
+        for run in await runtime.db.list("run", owner=owner):
+            if run["session_id"] in active and run["status"] in {"queued", "running", "cancelling"}:
+                active[run["session_id"]].append({"id": run["id"], "status": run["status"]})
+        return [{**item, "active_runs": active[item["id"]]} for item in items]
 
     @app.post("/api/sessions")
     async def create_session(body: SessionCreate, owner=Depends(user)):

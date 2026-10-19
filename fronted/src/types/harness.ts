@@ -2,6 +2,7 @@ export interface Session {
   id: string;
   title: string;
   user_id: string;
+  active_runs?: { id: string; status: string }[];
 }
 export interface Run {
   id: string;

@@ -16,7 +16,7 @@
 | POST | `/clients` | 生成窗口客户端 ID |
 | GET | `/events?client_id=…` | SSE；一个客户端一个连接，首先发送 ready |
 | POST | `/clients/{id}/disconnect` | 显式断开对应客户端 |
-| GET / POST | `/sessions` | 会话列表／以 title 创建会话 |
+| GET / POST | `/sessions` | 会话列表附 active_runs（仅任务 ID／状态）／以 title 创建会话 |
 | GET | `/sessions/{id}` | 会话、消息、执行、摘要、最近事件 |
 | DELETE | `/sessions/{id}` | 按用户归属逻辑删除；有运行／排队任务时返回 409，共享待办保留 |
 | POST | `/sessions/{id}/messages` | client_id、request_id、content；返回任务与队列状态 |
@@ -58,6 +58,8 @@
 前端保存最近 2000 条当前会话事件，详情接口最多返回最近 2000 条；数据库保留完整事件。SSE 实时连接不作为历史重放源，重连后从详情接口恢复状态。
 
 页面链路按任务及调用 ID 聚合模型／工具的开始和结果，每页 8 个步骤，默认折叠原始记录；文本 delta 和 message.created 不单列步骤，对话区保留最终消息。缺少或未通过测试的模型、容量与输出预留冲突，会在提交入队前返回 409，不创建空任务。
+
+会话列表的 active_runs 仅包含当前用户 queued／running／cancelling 任务。前端在筛选当前会话事件之前更新全列表活动状态；列表请求期间收到的任务事件优先于旧 HTTP 快照，避免已结束任务重新显示转圈。事件连接就绪后重新获取列表以恢复状态。
 
 ## SQLite
 

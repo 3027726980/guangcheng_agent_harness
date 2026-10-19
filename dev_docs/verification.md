@@ -12,11 +12,11 @@
 
 | 检查 | 实际结果 | 范围 |
 | --- | --- | --- |
-| `uv run pytest -q` | 47 passed，6.78 秒 | Runtime、Context、工具、恢复、API 和 SDK 假 HTTP 传输 |
+| `uv run pytest -q` | 48 passed，8.07 秒 | Runtime、Context、工具、恢复、API 和 SDK 假 HTTP 传输 |
 | `uv run ruff check app tests` | 通过 | 后端源码与测试静态检查 |
 | `uv run ruff format --check app tests` | 16 个文件已符合格式 | 后端源码与测试格式 |
-| `npm test` | 7 passed | SSE 切分边界、配置就绪、工具原位顺序及结果配对、压缩后用量、链路聚合 |
-| `npm run build` | 类型检查和 Vite 构建通过 | Vue／TypeScript；主入口约 446 kB，路由按需加载 |
+| `npm test` | 8 passed | 会话活动隔离、SSE、配置就绪、工具顺序及配对、压缩后用量、链路聚合 |
+| `npm run build` | 类型检查和 Vite 构建通过 | Vue／TypeScript；主入口约 447 kB，路由按需加载 |
 | Playwright 无头浏览器 | 已检查桌面与 390px 页面、发送／引导／停止／待办／模型设置交互 | 使用浏览器内静态产物及 API fixtures，无真实后端／模型 |
 
 浏览器检查发现桌面切到窄屏时侧栏未自动收起，修复媒体查询监听后重新截图确认。该次页面检查控制台无 error／warning。截图位于被 Git 忽略的 `output/playwright/`，例如 `settings-mobile-fixed.png`；构建、截图和浏览器测试临时数据不提交。
@@ -28,6 +28,8 @@
 新增待办内容输入后，类型检查及构建通过。浏览器 fixtures 检查标题必填、内容多行输入且 Enter 不提交、提交请求包含 notes、成功后清空标题和内容、列表保留换行，以及编辑时回填和修改内容；控制台无 error／warning。截图 `todo-content-desktop.png`。后端原已支持 notes，本轮未修改后端，也未重复运行后端测试或调用真实模型。
 
 右上角综合连接状态：类型检查及构建通过；浏览器 fixtures 检查仅后端连通（✓✕）、两项就绪（✓✓）、模型测试失败（✓✕）和后端断开（✕✓），确认只有两项都通过才显示“后端已链接”，悬浮独立展示原因。截图 `connection-ready.png`。检查使用模拟状态，没有重新测试真实模型连接。
+
+左侧会话转圈：后端新增列表状态和用户隔离验证，前端检查单条结束后排队仍保留及跨会话隔离。浏览器 fixtures 验证首次加载后台会话活动、非当前会话实时更新、切换会话保留、任务结束后消失，以及延迟 HTTP 快照不会覆盖较新的结束事件。截图 `session-spinner-background.png`。未启动或重启实际服务；现有后端需重启才会返回新增活动字段。
 
 ## 关键行为证据
 

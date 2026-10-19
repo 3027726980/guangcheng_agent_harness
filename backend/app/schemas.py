@@ -57,9 +57,12 @@ class SessionCreate(StrictModel):
     title: str = Field(default="新对话", min_length=1, max_length=100)
 
 
-class MessageRequest(StrictModel):
+class CompactionRequest(StrictModel):
     client_id: str = Field(min_length=16, max_length=100)
     request_id: str = Field(min_length=8, max_length=100)
+
+
+class MessageRequest(CompactionRequest):
     content: str = Field(min_length=1, max_length=200000)
 
 

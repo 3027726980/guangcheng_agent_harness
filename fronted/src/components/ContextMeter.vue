@@ -48,6 +48,17 @@
         tokens（包含自动输出预留）
       </p>
       <n-button text type="primary" @click="showSummary">查看历史摘要</n-button>
+      <div class="compact-action">
+        <n-button
+          size="small"
+          :loading="compacting"
+          :disabled="!!compactDisabled || compacting"
+          @click="emit('compact')"
+        >立即压缩</n-button>
+        <p v-if="compactDisabled">{{ compactDisabled }}</p>
+        <p v-else>调用摘要模型，保留最近一轮对话和完整原始历史。</p>
+        <p v-if="compactMessage" role="status">{{ compactMessage }}</p>
+      </div>
     </div>
   </n-popover>
 </template>
@@ -60,8 +71,11 @@ const props = defineProps<{
   usage?: Record<string, any>;
   capacity: number;
   source: string;
+  compacting?: boolean;
+  compactDisabled?: string;
+  compactMessage?: string;
 }>();
-const emit = defineEmits<{ summary: [] }>();
+const emit = defineEmits<{ summary: []; compact: [] }>();
 const detailsOpen = ref(false);
 function showSummary() {
   detailsOpen.value = false;
@@ -136,5 +150,10 @@ circle {
 .context-details p {
   margin: 6px 0;
   color: #75847b;
+}
+.compact-action {
+  margin-top: 12px;
+  border-top: 1px solid #e5ece7;
+  padding-top: 10px;
 }
 </style>

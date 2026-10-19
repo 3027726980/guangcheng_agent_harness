@@ -144,6 +144,7 @@ export function eventLabel(type: string) {
         "context.compacting": "开始压缩上下文",
         "context.compacted": "上下文压缩完成",
         "context.compaction_failed": "压缩未完成",
+        "context.compaction_skipped": "无需压缩",
         "steering.updated": "用户引导",
         "message.created": "保存消息",
       } as Record<string, string>

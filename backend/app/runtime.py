@@ -150,7 +150,7 @@ class Runtime:
         await self.emit("session.created", session, user_id=user_id)
         return session
 
-    async def submit(self, session_id, user_id, request):
+    async def submit(self, session_id, user_id, request, purpose="chat"):
         async with self.control:
             await self.session(session_id, user_id)
             client = self.clients.get(request.client_id)
@@ -160,13 +160,18 @@ class Runtime:
             previous = await self.db.get(request_key)
             if previous:
                 return await self.db.get(previous["run_id"])
+            if purpose == "context_compaction" and any(
+                run["status"] not in TERMINAL for run in await self.db.list("run", parent=session_id)
+            ):
+                raise DomainError("请等待当前任务和排队消息完成后再手动压缩", 409)
             await self.configured_models(await self.settings())
             run = {
                 "id": uid(),
                 "session_id": session_id,
                 "user_id": user_id,
                 "client_id": request.client_id,
-                "content": request.content,
+                "content": "手动压缩上下文" if purpose == "context_compaction" else request.content,
+                "purpose": purpose,
                 "status": "queued",
                 "created_at": time.time(),
                 "model_calls": 0,
@@ -188,6 +193,8 @@ class Runtime:
                 raise DomainError("任务不存在", 404)
             if run["status"] != "running":
                 raise DomainError("当前任务已不在运行，请作为新消息发送", 409)
+            if run.get("purpose") == "context_compaction":
+                raise DomainError("正在压缩上下文，请将补充内容作为新消息排队", 409)
             key = f"steer:{run_id}:{request.request_id}"
             item = await self.db.get(key)
             if item is None:
@@ -221,6 +228,7 @@ class Runtime:
                     if run["session_id"] == queued["session_id"]
                     and run["status"] == "running"
                     and not run.get("reason")
+                    and run.get("purpose") != "context_compaction"
                 ),
                 None,
             )
@@ -408,6 +416,37 @@ class Runtime:
                 )
                 await self.sleep(delay)
 
+    async def _compact_manually(self, run, settings, profile, summary_profile):
+        outcome = "skipped"
+
+        async def summarize(p, messages, max_tokens):
+            return await self._invoke(run, settings, p, messages, None, max_tokens, False)
+
+        async def emit(kind, data):
+            nonlocal outcome
+            await self.emit(kind, data, run)
+            if kind == "context.compaction_failed":
+                raise ContextFailure("手动压缩失败，已保留原摘要与完整历史")
+            if kind == "context.compacted":
+                outcome = "compacted"
+            if kind == "context.compaction_skipped":
+                run["compaction_message"] = data["reason"]
+
+        async with asyncio.timeout(settings.max_seconds):
+            await self.context.build(
+                run["session_id"],
+                run["id"],
+                settings,
+                profile,
+                summary_profile,
+                self.registry.schemas(),
+                SYSTEM,
+                summarize,
+                emit,
+                force=True,
+            )
+        run.update(status="completed", compaction_result=outcome)
+
     async def _execute(self, run):
         try:
             settings = await self.settings()
@@ -421,8 +460,12 @@ class Runtime:
                 "context_capacity": profile["context_capacity"],
                 "capacity_source": profile["capacity_source"],
             }
-            await self.append(run, {"role": "user", "content": run["content"]}, "request")
+            if run.get("purpose") != "context_compaction":
+                await self.append(run, {"role": "user", "content": run["content"]}, "request")
             await self.emit("run.updated", self.public_run(run), run)
+            if run.get("purpose") == "context_compaction":
+                await self._compact_manually(run, settings, profile, summary_profile)
+                return
             async with asyncio.timeout(settings.max_seconds):
                 while True:
                     await self._apply_steering(run)

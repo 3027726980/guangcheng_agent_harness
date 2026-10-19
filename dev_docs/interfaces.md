@@ -20,6 +20,7 @@
 | GET | `/sessions/{id}` | 会话、消息、执行、摘要、最近事件 |
 | DELETE | `/sessions/{id}` | 按用户归属逻辑删除；有运行／排队任务时返回 409，共享待办保留 |
 | POST | `/sessions/{id}/messages` | client_id、request_id、content；返回任务与队列状态 |
+| POST | `/sessions/{id}/compact` | client_id、request_id；空闲会话创建独立压缩任务，返回普通任务状态；忙碌返回 409，支持原停止接口 |
 | POST | `/runs/{id}/steering` | request_id、content；只接受运行中的任务 |
 | POST | `/runs/{id}/steer-queued` | 将当前用户的该条排队消息转为同 Session 当前任务的引导；原子转换、重复请求幂等；无可引导任务时返回 409 并保留队列 |
 | POST | `/runs/{id}/cancel` | 按明确任务 ID 停止 |

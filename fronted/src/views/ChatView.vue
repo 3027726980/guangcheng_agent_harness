@@ -171,6 +171,7 @@
                 :loading="promoting === run.id"
                 :disabled="
                   activeRun?.status !== 'running' ||
+                  activeRun?.purpose === 'context_compaction' ||
                   !state.connected ||
                   !!promoting
                 "
@@ -219,7 +220,11 @@
               :usage="contextUsage"
               :capacity="selectedProfile?.context_capacity || 0"
               :source="selectedProfile?.capacity_source || ''"
+              :compacting="compacting"
+              :compact-disabled="compactDisabled"
+              :compact-message="compactMessage"
               @summary="summaryOpen = true"
+              @compact="compactContext"
             />
             <n-button
               type="primary"
@@ -398,6 +403,8 @@ const todoTitle = ref(""),
 const editing = ref<Todo | null>(null),
   scrollArea = ref<HTMLElement | null>(null);
 const todoPage = ref(1);
+const compactSubmitting = ref(false);
+const compactError = ref("");
 const steeringErrors = ref<Record<string, string>>({});
 watch(
   () => [state.user, state.selected],
@@ -473,6 +480,33 @@ const activeRun = computed(() =>
 const queued = computed(() =>
   state.runs.filter((run) => run.status === "queued"),
 );
+const lastCompaction = computed(() =>
+  [...state.runs].reverse().find((run) => run.purpose === "context_compaction"),
+);
+const compacting = computed(() =>
+  compactSubmitting.value || state.runs.some(
+    (run) => run.purpose === "context_compaction" &&
+      ["queued", "running", "cancelling"].includes(run.status),
+  ),
+);
+const compactDisabled = computed(() =>
+  setupIssue.value ||
+  (!state.connected ? "后端未连接" : "") ||
+  (state.sessionLoading || !state.selected ? "请等待会话加载" : "") ||
+  (activeRun.value || queued.value.length ? "请等待当前任务和排队消息完成" : "") ||
+  (!state.messages.length ? "当前会话还没有可压缩的历史" : ""),
+);
+const compactMessage = computed(() => {
+  if (compactError.value) return compactError.value;
+  if (compacting.value) return "正在压缩上下文，可用对话页的停止按钮取消。";
+  const run = lastCompaction.value;
+  if (!run) return "";
+  if (run.status === "completed")
+    return run.compaction_result === "compacted"
+      ? "压缩完成，完整原始历史已保留。"
+      : run.compaction_message || "没有可压缩的较早历史。";
+  return `压缩未完成：${reasonLabel(run.reason) || statusLabel(run.status)}`;
+});
 const historicalProblems = computed(() =>
   state.runs.filter(
     (run) =>
@@ -518,6 +552,8 @@ const activityText = computed(() => {
     );
   if (activeRun.value?.status === "cancelling")
     return "正在停止并核对已执行结果…";
+  if (activeRun.value?.purpose === "context_compaction")
+    return "正在手动压缩上下文…";
   if (event?.type === "model.retry")
     return `${event.data.reason || "模型请求暂时失败"}，${event.data.delay_seconds} 秒后重试（${event.data.retry}/${event.data.max_retries || activeRun.value?.settings?.retries || "—"}）`;
   if (event?.type === "context.compacting") return "正在整理上下文…";
@@ -551,6 +587,7 @@ async function promoteQueued(id: string) {
   if (
     promoting.value ||
     activeRun.value?.status !== "running" ||
+    activeRun.value?.purpose === "context_compaction" ||
     !state.connected
   )
     return;
@@ -567,6 +604,27 @@ async function promoteQueued(id: string) {
         : `引导未生效：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     promoting.value = "";
+  }
+}
+async function compactContext() {
+  if (compacting.value || compactDisabled.value) return;
+  const session = state.selected;
+  compactSubmitting.value = true;
+  compactError.value = "";
+  try {
+    const run = await api(`/sessions/${session}/compact`, "POST", {
+      client_id: state.clientId,
+      request_id: crypto.randomUUID(),
+    });
+    if (state.selected === session && !state.runs.some((item) => item.id === run.id))
+      state.runs.push(run);
+  } catch (error) {
+    if (state.selected === session)
+      compactError.value = error instanceof ApiError && [404, 405].includes(error.status)
+        ? "压缩接口尚未加载，请重启后端后重试。"
+        : `压缩未开始：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    compactSubmitting.value = false;
   }
 }
 async function submit() {
@@ -660,6 +718,7 @@ watch(
   () => state.selected,
   () => {
     summaryOpen.value = false;
+    compactError.value = "";
   },
 );
 watch(

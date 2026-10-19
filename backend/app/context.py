@@ -68,6 +68,7 @@ class ContextManager:
         system,
         invoke_summary,
         emit,
+        force=False,
     ):
         history = await self.db.list("message", parent=session_id)
         prior = await self.db.get("summary:" + session_id)
@@ -115,7 +116,7 @@ class ContextManager:
                 "approximate": True,
             },
         )
-        if initial < available * settings.context_trigger:
+        if not force and initial < available * settings.context_trigger:
             return full
 
         # Protect original current request and all applied steering, not every old tool step.
@@ -125,6 +126,12 @@ class ContextManager:
             if row.get("run_id") == current_run_id and row.get("input_kind") in {"request", "steering"}
         ]
         pinned_ids = {row["id"] for row in pinned}
+        if force:
+            latest_user = next(
+                (index for index in range(len(rows) - 1, -1, -1) if rows[index]["message"]["role"] == "user"),
+                len(rows) - 1,
+            )
+            pinned_ids.update(row["id"] for row in rows[max(0, latest_user) :])
         selected, selected_ids, kept = [], [], []
         row_index = 0
         for group in groups:
@@ -133,6 +140,8 @@ class ContextManager:
             selected.append((group, group_rows))
         # Leave at least the newest complete block intact; extend suffix toward target.
         suffix_budget = available * settings.context_target - count([system, schemas]) - summary_tokens * 4
+        if force:
+            suffix_budget = 0
         retained = 0
         for group, group_rows in reversed(selected):
             is_pinned = any(row["id"] in pinned_ids for row in group_rows)
@@ -152,6 +161,8 @@ class ContextManager:
         if not to_summarize:
             if initial > available:
                 raise ContextFailure("当前请求和必要工具交互已超出容量，无法安全压缩")
+            if force:
+                await emit("context.compaction_skipped", {"reason": "没有可压缩的较早历史"})
             return full
 
         await emit("context.compacting", {"before": initial, "groups": len(to_summarize)})
@@ -206,6 +217,9 @@ class ContextManager:
             raise ContextFailure("上下文压缩失败，已保留原摘要及完整历史") from None
         result = assemble(summary, [row["message"] for row in rows if row["id"] in keep_ids])
         final = count(result) + count(schemas)
+        if force and final >= initial:
+            await emit("context.compaction_skipped", {"reason": "摘要未减少上下文用量，已保留原摘要与历史"})
+            return full
         if final > available:
             await emit("context.compaction_failed", {"retained_original": True})
             if initial <= available:

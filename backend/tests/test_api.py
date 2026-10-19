@@ -42,6 +42,16 @@ def test_api_identity_models_settings_and_shared_todos(tmp_path):
         assert client.get(f"/api/sessions/{session['id']}", headers={"X-Demo-User": "B"}).status_code == 404
         assert client.get("/api/sessions", headers={"X-Demo-User": "B"}).json() == []
         assert client.post("/api/runs/not-present/steer-queued").status_code == 404
+        assert (
+            client.post(
+                "/api/sessions/not-present/compact",
+                json={
+                    "client_id": "client-missing-123",
+                    "request_id": "compact-missing-123",
+                },
+            ).status_code
+            == 404
+        )
         response = client.post(
             "/api/todos",
             headers={"Idempotency-Key": "manual-1"},

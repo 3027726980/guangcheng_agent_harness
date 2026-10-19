@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.llm import ModelFailure
 from app.runtime import Client, DomainError, Runtime
 from app.schemas import (
+    CompactionRequest,
     MessageRequest,
     ModelProfile,
     RuntimeSettings,
@@ -155,6 +156,10 @@ def create_app(database_path=None, model=None):
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: MessageRequest, owner=Depends(user)):
         return runtime.public_run(await runtime.submit(session_id, owner, body))
+
+    @app.post("/api/sessions/{session_id}/compact")
+    async def compact_context(session_id: str, body: CompactionRequest, owner=Depends(user)):
+        return runtime.public_run(await runtime.submit(session_id, owner, body, purpose="context_compaction"))
 
     @app.post("/api/runs/{run_id}/steering")
     async def steer(run_id: str, body: SteeringRequest, owner=Depends(user)):

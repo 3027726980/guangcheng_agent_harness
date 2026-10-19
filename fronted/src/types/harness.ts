@@ -15,6 +15,9 @@ export interface Run {
   tool_calls: number;
   created_at: number;
   settings?: { retries?: number };
+  purpose?: string;
+  compaction_result?: string;
+  compaction_message?: string;
 }
 export interface Message {
   id: string;

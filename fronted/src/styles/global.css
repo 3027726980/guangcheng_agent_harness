@@ -1,0 +1,48 @@
+/* 基础样式沿用 Pin 的全局重置。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body,
+#app {
+  height: 100%;
+}
+body {
+  background: #f3f6f0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.n-layout-content.content {
+  background: #f3f6f0;
+  padding: 24px !important;
+}
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.page h1 {
+  margin-bottom: 16px;
+  font-size: 22px;
+  font-weight: 600;
+}
+.page p {
+  line-height: 1.8;
+}
+.page p + p {
+  margin-top: 12px;
+}
+.tags {
+  margin-top: 16px;
+}
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}

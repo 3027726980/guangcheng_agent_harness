@@ -15,13 +15,15 @@
 | `uv run pytest -q` | 47 passed，6.78 秒 | Runtime、Context、工具、恢复、API 和 SDK 假 HTTP 传输 |
 | `uv run ruff check app tests` | 通过 | 后端源码与测试静态检查 |
 | `uv run ruff format --check app tests` | 16 个文件已符合格式 | 后端源码与测试格式 |
-| `npm test` | 6 passed | SSE 切分边界、配置就绪、工具分组、压缩后用量、链路聚合 |
+| `npm test` | 7 passed | SSE 切分边界、配置就绪、工具原位顺序及结果配对、压缩后用量、链路聚合 |
 | `npm run build` | 类型检查和 Vite 构建通过 | Vue／TypeScript；主入口约 446 kB，路由按需加载 |
 | Playwright 无头浏览器 | 已检查桌面与 390px 页面、发送／引导／停止／待办／模型设置交互 | 使用浏览器内静态产物及 API fixtures，无真实后端／模型 |
 
 浏览器检查发现桌面切到窄屏时侧栏未自动收起，修复媒体查询监听后重新截图确认。该次页面检查控制台无 error／warning。截图位于被 Git 忽略的 `output/playwright/`，例如 `settings-mobile-fixed.png`；构建、截图和浏览器测试临时数据不提交。
 
 对话页优化补充验证：使用最新构建和浏览器内 fixtures，检查了缺模型提示、按钮及 Enter 拦截、工具过程默认折叠／展开、压缩后 Context 圆环、链路默认折叠与每页 8 步／切换第二页、确认删除后仅创建一个替代会话且共享待办保留。390px 页面无横向溢出，控制台无 error／warning。截图包括 `chat-refined-desktop.png`、`chat-refined-mobile.png`、`trace-refined-desktop.png`；这些仍是模拟 API 检查，不是实际服务联调。
+
+工具顺序调整后，前端 7 项测试与构建通过，并以相同浏览器 fixtures 确认“说明 → calculator 卡片 → 后续说明 → todo 卡片 → 最终回答”原位展示，各调用分别折叠；截图 `chat-inline-tools.png`。并发同批调用按请求顺序排列，不将该排列解释为实际完成顺序。
 
 ## 关键行为证据
 

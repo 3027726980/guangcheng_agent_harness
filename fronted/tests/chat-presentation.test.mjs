@@ -52,11 +52,16 @@ test("send readiness rejects missing, untested, incomplete and oversized configu
   assert.equal(configurationIssue("ready", settings, [profile]), "");
 });
 
-test("tool process groups dependent calls and results without hiding final replies or mixing runs", () => {
+test("tool calls remain inline with assistant text and pair only their own results", () => {
   const message = (id, role, run = "r", calls) => ({
     id,
     run_id: run,
-    message: { role, content: id, tool_calls: calls },
+    message: {
+      role,
+      content: id,
+      tool_calls: calls,
+      tool_call_id: role === "tool" ? "call" : undefined,
+    },
   });
   const call = {
     id: "call",
@@ -77,13 +82,56 @@ test("tool process groups dependent calls and results without hiding final repli
     items.map((item) => [item.kind, item.rows.length]),
     [
       ["message", 1],
-      ["tools", 4],
+      ["message", 1],
+      ["tools", 2],
+      ["message", 1],
+      ["tools", 2],
+      ["message", 1],
       ["message", 1],
       ["tools", 1],
       ["tools", 1],
     ],
   );
-  assert.equal(items[2].rows[0].id, "answer");
+  assert.deepEqual(
+    items.map((item) => item.rows[0].id),
+    ["request", "a", "a", "c", "c", "answer", "next", "next", "last"],
+  );
+  assert.equal(items[2].rows[1].id, "b");
+  assert.equal(items[4].rows[1].id, "d");
+  assert.equal(items[1].rows[0].message.tool_calls, undefined);
+  assert.equal(items[2].rows[0].message.content, null);
+  assert.equal(rows[1].message.content, "a");
+});
+
+test("same-batch calls get separate cards and a later user message stays in sequence", () => {
+  const call = (id) => ({ id, function: { name: id, arguments: "{}" } });
+  const row = (id, message) => ({ id, run_id: "r", message });
+  const items = conversationItems([
+    row("calls", {
+      role: "assistant",
+      content: null,
+      tool_calls: [call("search"), call("calculator")],
+    }),
+    row("calc-result", {
+      role: "tool",
+      tool_call_id: "calculator",
+      content: "{}",
+    }),
+    row("search-result", {
+      role: "tool",
+      tool_call_id: "search",
+      content: "{}",
+    }),
+    row("steering", { role: "user", content: "补充条件" }),
+    row("late", { role: "tool", tool_call_id: "calculator", content: "{}" }),
+  ]);
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ["calls:search", "calls:calculator", "steering", "late"],
+  );
+  assert.equal(items[0].rows[1].id, "search-result");
+  assert.equal(items[1].rows[1].id, "calc-result");
+  assert.equal(items[3].rows.length, 1);
 });
 
 test("context ring uses the post-compaction estimate until a newer usage sample", () => {

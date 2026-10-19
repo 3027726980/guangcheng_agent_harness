@@ -1,7 +1,7 @@
 <template>
   <details class="tool-process">
     <summary>
-      <span>工具过程 · {{ calls.length }} 次调用</span>
+      <span>调用工具 · {{ calls[0]?.function.name || "工具结果" }}</span>
       <span class="outcome" :class="{ failed: failures > 0 }"
         >{{
           failures ? `${failures} 次未成功` : pending ? "执行中" : "已完成"

@@ -42,22 +42,37 @@ export interface ConversationItem {
 
 export function conversationItems(messages: Message[]): ConversationItem[] {
   const result: ConversationItem[] = [];
+  const pending = new Map<string, ConversationItem>();
   for (const row of messages) {
-    const isTool =
-      row.message.role === "tool" || !!row.message.tool_calls?.length;
-    const previous = result[result.length - 1];
-    if (
-      isTool &&
-      previous?.kind === "tools" &&
-      previous.rows[0]?.run_id === row.run_id
-    ) {
-      previous.rows.push(row);
-    } else {
+    if (row.message.role === "tool") {
+      const item = pending.get(`${row.run_id}:${row.message.tool_call_id}`);
+      if (item) item.rows.push(row);
+      else result.push({ id: row.id, kind: "tools", rows: [row] });
+      continue;
+    }
+    pending.clear();
+    const calls = row.message.tool_calls || [];
+    // Keep public assistant text at its original position, outside collapsed details.
+    if (!calls.length || row.message.content?.trim()) {
       result.push({
         id: row.id,
-        kind: isTool ? "tools" : "message",
-        rows: [row],
+        kind: "message",
+        rows: [{ ...row, message: { ...row.message, tool_calls: undefined } }],
       });
+    }
+    for (const call of calls) {
+      const item: ConversationItem = {
+        id: `${row.id}:${call.id}`,
+        kind: "tools",
+        rows: [
+          {
+            ...row,
+            message: { ...row.message, content: null, tool_calls: [call] },
+          },
+        ],
+      };
+      pending.set(`${row.run_id}:${call.id}`, item);
+      result.push(item);
     }
   }
   return result;

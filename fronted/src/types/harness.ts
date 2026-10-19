@@ -14,6 +14,7 @@ export interface Run {
   model_calls: number;
   tool_calls: number;
   created_at: number;
+  settings?: { retries?: number };
 }
 export interface Message {
   id: string;

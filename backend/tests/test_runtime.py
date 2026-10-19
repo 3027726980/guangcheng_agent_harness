@@ -110,6 +110,9 @@ async def test_three_retries_and_model_budget(harness):
     assert result["status"] == "completed"
     assert result["model_calls"] == 4
     assert waits == [30.0, 30.0, 30.0]
+    retry_events = [event for event in await rt.db.history_events("A") if event["type"] == "model.retry"]
+    assert retry_events[0]["data"]["reason"] == "网络失败"
+    assert retry_events[0]["data"]["max_retries"] == 3
     settings = (await rt.settings()).model_copy(update={"max_model_calls": 1})
     await rt.db.put("settings", {"id": "runtime-settings", **settings.model_dump()})
     model.replies = [ModelFailure("故障", True), ModelReply(text="不应调用")]
@@ -286,3 +289,55 @@ async def test_deletion_rejects_busy_session_then_hides_history(harness):
         await send(rt, client, session)
     assert await rt.db.list("message", parent=session["id"])
     assert (await rt.db.history_events("A"))[-1]["type"] == "session.deleted"
+
+
+async def test_queued_message_can_be_atomically_promoted_to_current_run(harness):
+    rt, model, client, session, _ = harness
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def block(messages, on_text):
+        entered.set()
+        await release.wait()
+        return ModelReply(text="初稿")
+
+    model.replies = [block, ModelReply(text="按引导调整完成"), ModelReply(text="普通排队任务完成")]
+    first = await send(rt, client, session, "原始任务")
+    await asyncio.wait_for(entered.wait(), 2)
+    queued = await send(rt, client, session, "只考虑免费资源")
+    other = await send(rt, client, session, "下一件独立任务")
+    with pytest.raises(DomainError) as denied:
+        await rt.steer_queued(queued["id"], "B")
+    assert denied.value.status == 404
+    item = await rt.steer_queued(queued["id"], "A")
+    assert await rt.steer_queued(queued["id"], "A") == item
+    assert item["run_id"] == first["id"] and item["source_run_id"] == queued["id"]
+    saved = await rt.db.get(queued["id"])
+    assert saved["status"] == "cancelled" and saved["reason"] == "converted_to_steering"
+    with pytest.raises(DomainError) as started:
+        await rt.steer_queued(first["id"], "A")
+    assert started.value.status == 409
+    release.set()
+    completed = await terminal(rt, first["id"])
+    assert completed["status"] == "completed" and completed["model_calls"] == 2
+    assert (await terminal(rt, other["id"]))["status"] == "completed"
+    assert "只考虑免费资源" in json.dumps(model.inputs[1], ensure_ascii=False)
+    assert len(await rt.db.list("steering", parent=first["id"])) == 1
+    assert not any(row["run_id"] == queued["id"] for row in await rt.db.list("message", parent=session["id"]))
+
+
+async def test_promoting_after_current_task_finishes_preserves_queue(harness):
+    rt, _, client, session, _ = harness
+    queued = {
+        "id": "pending",
+        "session_id": session["id"],
+        "user_id": "A",
+        "client_id": client.id,
+        "status": "queued",
+        "content": "保留消息",
+    }
+    await rt.db.put("run", queued, owner="A", parent=session["id"])
+    with pytest.raises(DomainError) as error:
+        await rt.steer_queued(queued["id"], "A")
+    assert error.value.status == 409
+    assert (await rt.db.get(queued["id"]))["status"] == "queued"
+    assert await rt.db.list("steering") == []

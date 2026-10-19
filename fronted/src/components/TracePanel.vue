@@ -7,7 +7,9 @@
       placeholder="暂无执行任务"
     />
     <div class="trace-overview" v-if="currentRun">
-      <n-tag size="small">{{ runStatus(currentRun.status) }}</n-tag>
+      <n-tag size="small">{{
+        runStatus(currentRun.status, currentRun.reason)
+      }}</n-tag>
       <span
         >模型 {{ currentRun.model_calls }} 次 · 工具
         {{ currentRun.tool_calls }} 次</span
@@ -67,7 +69,7 @@ const selectedRun = ref<string | null>(null),
   pageSize = 8;
 const options = computed(() =>
   [...props.runs].reverse().map((run) => ({
-    label: `${runStatus(run.status)} · ${run.content.slice(0, 42)}`,
+    label: `${runStatus(run.status, run.reason)} · ${run.content.slice(0, 42)}`,
     value: run.id,
   })),
 );
@@ -103,7 +105,8 @@ const visibleSteps = computed(() =>
   steps.value.slice((page.value - 1) * pageSize, page.value * pageSize),
 );
 function describe(event: TraceEvent) {
-  if (event.type === "run.updated") return runStatus(event.data.status);
+  if (event.type === "run.updated")
+    return runStatus(event.data.status, event.data.reason);
   if (event.type === "tool.finished")
     return event.data.ok
       ? `执行成功 · ${event.data.elapsed_ms ?? 0} ms`
@@ -113,7 +116,7 @@ function describe(event: TraceEvent) {
   if (event.type === "context.usage")
     return `估算 ${Number(event.data.estimated_tokens).toLocaleString()} tokens`;
   if (event.type === "model.retry")
-    return `${event.data.delay_seconds} 秒后重试`;
+    return `${event.data.reason || "模型请求暂时失败"}，${event.data.delay_seconds} 秒后重试`;
   return eventLabel(event.type);
 }
 </script>

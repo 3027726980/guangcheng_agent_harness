@@ -203,6 +203,49 @@ class Runtime:
             await self._cancel_locked(run, reason)
             return self.public_run(await self.db.get(run_id))
 
+    async def steer_queued(self, queued_id, user_id):
+        async with self.control:
+            queued = await self.db.get(queued_id)
+            if not queued or queued.get("user_id") != user_id or "session_id" not in queued:
+                raise DomainError("排队任务不存在", 404)
+            await self.session(queued["session_id"], user_id)
+            if queued.get("reason") == "converted_to_steering":
+                return await self.db.get(queued["steering_id"])
+            if queued["status"] != "queued":
+                raise DomainError("该消息已不在队列中，不能转为引导", 409)
+            target = next(
+                (
+                    run
+                    for run in self.active.values()
+                    if run["session_id"] == queued["session_id"]
+                    and run["status"] == "running"
+                    and not run.get("reason")
+                ),
+                None,
+            )
+            if not target:
+                raise DomainError("当前没有可引导的运行任务，原消息仍保留在队列中", 409)
+            item = {
+                "id": f"steer:queued:{queued_id}",
+                "content": queued["content"],
+                "status": "pending",
+                "run_id": target["id"],
+                "source_run_id": queued_id,
+            }
+            queued.update(
+                status="cancelled",
+                reason="converted_to_steering",
+                ended_at=time.time(),
+                steering_id=item["id"],
+                steering_run_id=target["id"],
+            )
+            async with self.db.transaction() as connection:
+                await self.db.put("steering", item, owner=user_id, parent=target["id"], connection=connection)
+                await self.db.put("run", queued, connection=connection)
+            await self.emit("run.updated", self.public_run(queued), queued)
+            await self.emit("steering.updated", item, target)
+            return item
+
     async def _cancel_locked(self, run, reason):
         if run["status"] in TERMINAL:
             return
@@ -352,7 +395,16 @@ class Runtime:
                 remaining = run["started_at"] + settings.max_seconds - time.time()
                 if delay >= remaining:
                     raise BudgetExceeded("剩余总时长不足以等待重试") from None
-                await self.emit("model.retry", {"retry": attempt + 1, "delay_seconds": delay}, run)
+                await self.emit(
+                    "model.retry",
+                    {
+                        "retry": attempt + 1,
+                        "max_retries": settings.retries,
+                        "delay_seconds": delay,
+                        "reason": str(failure),
+                    },
+                    run,
+                )
                 await self.sleep(delay)
 
     async def _execute(self, run):

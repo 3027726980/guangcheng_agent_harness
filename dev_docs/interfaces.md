@@ -21,6 +21,7 @@
 | DELETE | `/sessions/{id}` | 按用户归属逻辑删除；有运行／排队任务时返回 409，共享待办保留 |
 | POST | `/sessions/{id}/messages` | client_id、request_id、content；返回任务与队列状态 |
 | POST | `/runs/{id}/steering` | request_id、content；只接受运行中的任务 |
+| POST | `/runs/{id}/steer-queued` | 将当前用户的该条排队消息转为同 Session 当前任务的引导；原子转换、重复请求幂等；无可引导任务时返回 409 并保留队列 |
 | POST | `/runs/{id}/cancel` | 按明确任务 ID 停止 |
 | GET | `/todos` | 当前用户未删除待办 |
 | POST | `/todos` | TodoArgs，写入需要 Idempotency-Key |
@@ -36,6 +37,8 @@
 任务状态：`queued`、`running`、`cancelling`、`completed`、`cancelled`、`failed`、`interrupted`、`limited`。
 
 停止原因单独记录，例如 `user_stop`、`client_disconnect`、`server_restart`。工具结果的 `ok` 只代表已确认操作结果；取消时工具可能已经成功，记录 `stop_requested` 解释两者并不矛盾。
+
+排队转引导后，来源任务以 cancelled／converted_to_steering 记录，关联 steering_id 和 steering_run_id；引导记录保留 source_run_id。页面显示“已转为引导”，不作为取消错误提示；引导继续消耗当前任务预算。
 
 消息保存 role/content、工具请求及 tool_call_id；应用元数据另存消息 ID、任务 ID、输入类别和时间。模型输入不重放残缺参数。修复未配对工具调用时，优先读取已提交操作证据，否则补中断结果。
 

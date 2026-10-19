@@ -155,29 +155,46 @@
           }}<br /><small>{{ reasonLabel(run.reason) }}</small>
         </n-alert>
       </div>
-      <div v-if="queued.length" class="queue-strip">
-        <strong>等待执行 {{ queued.length }} 条</strong>
-        <div v-for="run in queued" :key="run.id">
-          {{ run.content }}
-          <n-button
-            text
-            size="tiny"
-            @click="safely(() => api(`/runs/${run.id}/cancel`, 'POST'))"
-            >取消排队</n-button
-          >
+      <div v-if="queued.length || pendingSteering.length" class="queue-strip">
+        <template v-if="queued.length">
+          <strong>等待执行 {{ queued.length }} 条</strong>
+          <div v-for="run in queued" :key="run.id" class="queue-row">
+            <div class="queue-content">{{ run.content }}</div>
+            <div class="queue-actions">
+              <n-button
+                size="tiny"
+                :loading="promoting === run.id"
+                :disabled="
+                  activeRun?.status !== 'running' ||
+                  !state.connected ||
+                  !!promoting
+                "
+                @click="promoteQueued(run.id)"
+                >引导</n-button
+              >
+              <n-button
+                text
+                size="tiny"
+                @click="safely(() => api(`/runs/${run.id}/cancel`, 'POST'))"
+                >取消排队</n-button
+              >
+            </div>
+          </div>
+        </template>
+        <div
+          v-for="item in pendingSteering"
+          :key="item.id"
+          class="queue-row steering-row"
+        >
+          <div class="queue-content">{{ item.data.content }}</div>
+          <span class="queue-status">引导待生效</span>
         </div>
       </div>
-      <div v-if="pendingSteering.length" class="queue-strip steering-strip">
-        等待生效的引导：
-        <div v-for="item in pendingSteering" :key="item.id">
-          {{ item.data.content }}
-        </div>
-      </div>
-      <form class="composer" @submit.prevent="submit(false)">
+      <form class="composer" @submit.prevent="submit()">
         <n-input
           v-model:value="input"
           type="textarea"
-          placeholder="输入任务。运行时普通消息排队，也可以选择引导当前任务。"
+          placeholder="输入任务。运行中发送会排队，可在队列消息旁点击引导。"
           :autosize="{ minRows: 2, maxRows: 8 }"
           :disabled="sending"
           @keydown="onKeydown"
@@ -192,12 +209,6 @@
               :disabled="activeRun.status === 'cancelling'"
               @click="stop"
               >停止</n-button
-            >
-            <n-button
-              v-if="activeRun?.status === 'running'"
-              :disabled="!canSend || !input.trim() || sending"
-              @click="submit(true)"
-              >引导</n-button
             >
             <ContextMeter
               :usage="contextUsage"
@@ -256,13 +267,16 @@
       </div>
       <div v-for="todo in state.todos" :key="todo.id" class="todo-item">
         <n-checkbox
+          class="todo-checkbox"
+          :aria-label="`完成待办：${todo.title}`"
           :checked="todo.status === 'completed'"
           @update:checked="(checked) => toggleTodo(todo, checked)"
         />
-        <div>
-          <span :class="{ done: todo.status === 'completed' }">{{
-            todo.title
-          }}</span
+        <div class="todo-body">
+          <span
+            class="todo-title"
+            :class="{ done: todo.status === 'completed' }"
+            >{{ todo.title }}</span
           ><small>v{{ todo.version }} · {{ todo.id.slice(0, 8) }}</small>
           <p v-if="todo.notes">{{ todo.notes }}</p>
           <n-space size="small"
@@ -353,6 +367,7 @@ import {
 const router = useRouter();
 const input = ref(""),
   sending = ref(false),
+  promoting = ref(""),
   traceOpen = ref(false),
   todosOpen = ref(true),
   summaryOpen = ref(false);
@@ -414,6 +429,7 @@ const historicalProblems = computed(() =>
   state.runs.filter(
     (run) =>
       ["cancelled", "failed", "limited", "interrupted"].includes(run.status) &&
+      run.reason !== "converted_to_steering" &&
       !dismissedProblems.value.includes(run.id),
   ),
 );
@@ -449,12 +465,13 @@ const activityText = computed(() => {
     .reverse()
     .find(
       (item) =>
-        item.run_id === activeRun.value?.id && item.type !== "model.delta",
+        item.run_id === activeRun.value?.id &&
+        !["model.delta", "steering.updated"].includes(item.type),
     );
   if (activeRun.value?.status === "cancelling")
     return "正在停止并核对已执行结果…";
   if (event?.type === "model.retry")
-    return `等待 ${event.data.delay_seconds} 秒后重试（第 ${event.data.retry} 次）`;
+    return `${event.data.reason || "模型请求暂时失败"}，${event.data.delay_seconds} 秒后重试（${event.data.retry}/${event.data.max_retries || activeRun.value?.settings?.retries || "—"}）`;
   if (event?.type === "context.compacting") return "正在整理上下文…";
   if (event?.type === "tool.started") return `正在执行 ${event.data.name}…`;
   return "Agent 正在处理…";
@@ -482,12 +499,26 @@ function reasonLabel(reason?: string) {
     )[reason || ""] || reason
   );
 }
-async function submit(steering: boolean) {
+async function promoteQueued(id: string) {
+  if (
+    promoting.value ||
+    activeRun.value?.status !== "running" ||
+    !state.connected
+  )
+    return;
+  promoting.value = id;
+  try {
+    await safely(() => api(`/runs/${id}/steer-queued`, "POST"));
+  } finally {
+    promoting.value = "";
+  }
+}
+async function submit() {
   const content = input.value.trim();
   if (!content || sending.value || !canSend.value) return;
   sending.value = true;
   await safely(async () => {
-    await send(content, steering ? activeRun.value?.id : undefined);
+    await send(content);
     input.value = "";
   });
   sending.value = false;
@@ -495,7 +526,7 @@ async function submit(steering: boolean) {
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    void submit(false);
+    void submit();
   }
 }
 function stop() {
@@ -812,12 +843,23 @@ small {
   line-height: 1.8;
 }
 .todo-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
   padding: 15px 0;
   border-bottom: 1px solid #e3e9e3;
 }
-.todo-item > div {
+.todo-checkbox {
+  justify-self: start;
+  align-self: start;
+  margin-top: 2px;
+}
+.todo-title {
+  display: block;
+  line-height: 1.6;
+}
+.todo-body {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 13px;
@@ -844,12 +886,30 @@ small {
   max-height: 110px;
   overflow: auto;
 }
-.queue-strip div {
-  margin-top: 4px;
+.queue-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 8px;
 }
-.steering-strip {
-  background: #edf5f4;
+.queue-content {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.steering-row {
   color: #497d75;
+}
+.queue-status {
+  flex-shrink: 0;
+  font-size: 11px;
 }
 .run-note {
   font-size: 12px;

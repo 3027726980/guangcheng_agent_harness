@@ -142,7 +142,8 @@ export function eventLabel(type: string) {
   );
 }
 
-export function runStatus(status: string) {
+export function runStatus(status: string, reason?: string) {
+  if (reason === "converted_to_steering") return "已转为引导";
   return (
     (
       {

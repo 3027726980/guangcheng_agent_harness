@@ -164,6 +164,10 @@ def create_app(database_path=None, model=None):
     async def cancel(run_id: str, owner=Depends(user)):
         return await runtime.cancel(run_id, owner)
 
+    @app.post("/api/runs/{run_id}/steer-queued")
+    async def steer_queued(run_id: str, owner=Depends(user)):
+        return await runtime.steer_queued(run_id, owner)
+
     @app.get("/api/todos")
     async def todos(owner=Depends(user)):
         return await todo(runtime.db, owner, TodoArgs(action="list"), "read:" + uid())

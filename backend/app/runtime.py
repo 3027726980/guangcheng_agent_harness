@@ -426,7 +426,7 @@ class Runtime:
             nonlocal outcome
             await self.emit(kind, data, run)
             if kind == "context.compaction_failed":
-                raise ContextFailure("手动压缩失败，已保留原摘要与完整历史")
+                raise ContextFailure(f"{data.get('reason') or '手动压缩失败'}，已保留原摘要与完整历史")
             if kind == "context.compacted":
                 outcome = "compacted"
             if kind == "context.compaction_skipped":

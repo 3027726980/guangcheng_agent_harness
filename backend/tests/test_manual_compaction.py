@@ -1,8 +1,10 @@
 import asyncio
+import json
 
+import httpx
 import pytest
 
-from app.llm import ModelFailure
+from app.llm import ModelFailure, OpenAIModel
 from app.runtime import DomainError
 from app.schemas import CompactionRequest, ModelReply
 from app.storage import uid
@@ -73,6 +75,62 @@ async def test_longer_summary_is_not_committed(harness):
     assert "未减少" in result["compaction_message"]
     assert await rt.db.get("summary:" + session["id"]) is None
     assert await rt.db.list("message", parent=session["id"]) == original
+
+
+async def test_reasoning_summary_uses_provider_default_instead_of_text_target_cap(harness):
+    rt, _, client, session, _ = harness
+    original = await history(rt, session)
+    payloads = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        capped = "max_tokens" in payload or "max_completion_tokens" in payload
+        # Reproduce a reasoning model spending the small cap before producing text.
+        return httpx.Response(
+            200,
+            json={
+                "id": "summary",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "offline",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "length" if capped else "stop",
+                        "message": {"role": "assistant", "content": "" if capped else "用户约束摘要"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 500,
+                    "completion_tokens": 5000,
+                    "total_tokens": 5500,
+                    "completion_tokens_details": {"reasoning_tokens": 4900},
+                },
+            },
+        )
+
+    rt.model = OpenAIModel(httpx.MockTransport(respond))
+    run = await compact(rt, client, session)
+    result = await terminal(rt, run["id"])
+    assert result["status"] == "completed" and result["compaction_result"] == "compacted"
+    assert "摘要正文目标" in payloads[0]["messages"][0]["content"]
+    assert "max_tokens" not in payloads[0] and "max_completion_tokens" not in payloads[0]
+    assert len(payloads) == 1
+    assert await rt.db.list("message", parent=session["id"]) == original
+
+
+async def test_provider_truncated_summary_reports_reason_and_keeps_prior_summary(harness):
+    rt, model, client, session, _ = harness
+    original = await history(rt, session)
+    prior = {"id": "summary:" + session["id"], "text": "原摘要", "covered": [original[0]["id"]]}
+    await rt.db.put("summary", prior, parent=session["id"])
+    model.replies = [ModelReply(finish_reason="length", usage={"completion_tokens": 1114})]
+    run = await compact(rt, client, session)
+    result = await terminal(rt, run["id"])
+    assert result["status"] == "failed" and "输出上限截断" in result["reason"]
+    assert await rt.db.get(prior["id"]) == prior
+    assert (await rt.db.list("message", parent=session["id"]))[: len(original)] == original
 
 
 @pytest.mark.parametrize("cancel", [False, True])

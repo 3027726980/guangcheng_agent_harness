@@ -38,6 +38,8 @@ let generation = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 const deletionRefreshes = new Map<string, Promise<void>>();
 const sessionSnapshots = new Set<Run[]>();
+const disconnectedNotice =
+  "连接已断开，当前执行和排队消息会被取消；重新连接不会自动重跑。";
 let sessionsRequest = 0;
 
 export async function api<T = any>(
@@ -243,6 +245,7 @@ async function connect(epoch: number) {
           state.connecting = false;
           await loadSessions();
           if (state.selected) await selectSession(state.selected);
+          if (state.error === disconnectedNotice) state.error = "";
         } else if (frame.data) receive(JSON.parse(frame.data));
       }
     }
@@ -251,8 +254,7 @@ async function connect(epoch: number) {
       epoch === generation &&
       !(error instanceof DOMException && error.name === "AbortError")
     ) {
-      state.error =
-        "连接已断开，当前执行和排队消息会被取消；重新连接不会自动重跑。";
+      state.error = disconnectedNotice;
     }
   } finally {
     if (epoch === generation) {

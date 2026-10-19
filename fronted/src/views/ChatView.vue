@@ -142,10 +142,18 @@
         <div v-if="activeRun" class="activity-line">
           <span class="activity-dot" />{{ activityText }}
         </div>
-        <div v-for="run in historicalProblems" :key="run.id" class="run-note">
+        <n-alert
+          v-for="run in historicalProblems"
+          :key="run.id"
+          class="run-note"
+          type="warning"
+          :show-icon="false"
+          closable
+          @close="dismissProblem(run.id)"
+        >
           <strong>{{ statusLabel(run.status) }}</strong> · {{ run.content
           }}<br /><small>{{ reasonLabel(run.reason) }}</small>
-        </div>
+        </n-alert>
       </div>
       <div v-if="queued.length" class="queue-strip">
         <strong>等待执行 {{ queued.length }} 条</strong>
@@ -356,6 +364,36 @@ const todoTitle = ref(""),
   editNotes = ref("");
 const editing = ref<Todo | null>(null),
   scrollArea = ref<HTMLElement | null>(null);
+const dismissedProblems = ref<string[]>([]);
+const problemStorageKey = () =>
+  `harness-dismissed-runs:${state.user}:${state.selected}`;
+function dismissProblem(id: string) {
+  dismissedProblems.value = [...new Set([...dismissedProblems.value, id])];
+  try {
+    sessionStorage.setItem(
+      problemStorageKey(),
+      JSON.stringify(dismissedProblems.value),
+    );
+  } catch {
+    /* Dismissal still works if storage is unavailable. */
+  }
+}
+watch(
+  () => [state.user, state.selected],
+  () => {
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem(problemStorageKey()) || "[]",
+      );
+      dismissedProblems.value = Array.isArray(saved)
+        ? saved.filter((id): id is string => typeof id === "string")
+        : [];
+    } catch {
+      dismissedProblems.value = [];
+    }
+  },
+  { immediate: true },
+);
 const examples = [
   "计算 128 × 36，并把结果记入待办。",
   "搜索 Python 学习资料，制定每天30分钟的计划并记入待办。",
@@ -373,8 +411,10 @@ const queued = computed(() =>
   state.runs.filter((run) => run.status === "queued"),
 );
 const historicalProblems = computed(() =>
-  state.runs.filter((run) =>
-    ["cancelled", "failed", "limited", "interrupted"].includes(run.status),
+  state.runs.filter(
+    (run) =>
+      ["cancelled", "failed", "limited", "interrupted"].includes(run.status) &&
+      !dismissedProblems.value.includes(run.id),
   ),
 );
 const setupIssue = computed(() =>

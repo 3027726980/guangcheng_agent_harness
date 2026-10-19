@@ -196,7 +196,7 @@
           type="textarea"
           placeholder="输入任务。运行中发送会排队，可在队列消息旁点击引导。"
           :autosize="{ minRows: 2, maxRows: 8 }"
-          :disabled="sending"
+          :readonly="sending"
           @keydown="onKeydown"
         />
         <div class="composer-actions">

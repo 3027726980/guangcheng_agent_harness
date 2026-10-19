@@ -8,6 +8,26 @@
 
 需要 Python 3.12、uv、Node.js 22.6 或以上，以及支持 Chat Completions、Function Calling、流式输出的模型服务。
 
+### Windows 快速启动
+
+参考 Pin 的 `backend/scripts-dev/quick-start`，本项目提供相同的三个双击入口：
+
+- [main.bat](backend/scripts-dev/quick-start/main.bat)：同时打开后端和前端 PowerShell 窗口。
+- [backend.bat](backend/scripts-dev/quick-start/backend.bat)：只启动后端。
+- [frontend.bat](backend/scripts-dev/quick-start/frontend.bat)：只启动前端（项目目录仍为 `fronted`）。
+
+首次使用先按下方命令安装依赖，之后双击入口即可。脚本自动定位项目根目录，检查虚拟环境、依赖、Node 版本和端口，不自动安装依赖或终止已有进程。8000／5173 被占用时会明确报错。
+
+也可以在 PowerShell 中仅做启动前检查，不启动服务：
+
+```powershell
+& 'D:\MyProject\guangcheng_agent_harness\backend\scripts-dev\quick-start\main.bat' --check
+```
+
+三个入口均支持 `--check`；底层逻辑为同目录 `start.ps1`，可直接使用 `-Target All|Backend|Frontend -CheckOnly`。实际启动后，等待两个窗口显示就绪信息，访问 `http://127.0.0.1:5173`。停止时在各服务窗口按 `Ctrl+C`。脚本本身不调用模型，保存模型配置／发起聊天时才会调用。
+
+### 手动安装与启动
+
 后端，在 PowerShell 中运行：
 
 ```powershell

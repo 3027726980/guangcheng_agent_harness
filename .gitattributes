@@ -1,2 +1,3 @@
 backend/** text eol=lf
 fronted/** text eol=lf
+backend/scripts-dev/quick-start/*.bat text eol=crlf

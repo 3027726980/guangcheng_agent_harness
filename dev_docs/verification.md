@@ -2,6 +2,12 @@
 
 日期：2026-10-20。本文件仅记录实际完成的检查。离线验证不能替代真实供应商验收。
 
+## Windows 快速启动脚本补充
+
+参考 `D:\MyProject\Pin\backend\scripts-dev\quick-start` 的三个入口，新增 `backend/scripts-dev/quick-start/main.bat`、`backend.bat`、`frontend.bat`，由共用 `start.ps1` 定位目录、检查依赖与端口、启动服务。
+
+已使用 Windows PowerShell 解析脚本；运行 `start.ps1 -Target All -CheckOnly`，并从项目外工作目录运行 `main.bat --check`，均通过。单端入口也分别执行 `--check`。这些检查不会启动服务、安装依赖或调用模型。实际双窗口启动、网络就绪和 Ctrl+C 停止尚未执行验收；入口显示“已打开窗口”不等于服务已经就绪。
+
 ## 本次结果
 
 | 检查 | 实际结果 | 范围 |

@@ -164,6 +164,9 @@ class ContextManager:
         chunk, chunk_ids = [], []
         for group, group_rows in to_summarize:
             if summary_count([instruction, summary, group]) > chunk_budget:
+                await emit("context.compaction_failed", {"retained_original": True})
+                if initial <= available:
+                    return full
                 raise ContextFailure("完整工具步骤超过摘要模型容量，无法无损选择摘要边界")
             if chunk and summary_count([instruction, summary, chunk, group]) > chunk_budget:
                 chunks.append((chunk, chunk_ids))
@@ -201,6 +204,9 @@ class ContextManager:
         result = assemble(summary, [row["message"] for row in rows if row["id"] in keep_ids])
         final = count(result) + count(schemas)
         if final > available:
+            await emit("context.compaction_failed", {"retained_original": True})
+            if initial <= available:
+                return full
             raise ContextFailure("压缩后必要内容仍然超出容量，原摘要与历史未修改")
         await self.db.put(
             "summary",

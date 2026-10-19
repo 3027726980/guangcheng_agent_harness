@@ -1,6 +1,8 @@
+import asyncio
+
 import pytest
 
-from app.context import ContextFailure, ContextManager, tool_groups
+from app.context import ContextFailure, ContextManager, tokens, tool_groups
 from app.llm import ModelFailure
 from app.schemas import ModelReply, RuntimeSettings
 from app.storage import Database, uid
@@ -98,3 +100,65 @@ def test_incomplete_tool_pair_is_rejected():
         tool_groups([{"role": "assistant", "tool_calls": [{"id": "a"}]}])
     with pytest.raises(ContextFailure):
         tool_groups([{"role": "tool", "tool_call_id": "orphan"}])
+
+
+async def test_smaller_summary_model_preserves_still_fitting_original(tmp_path):
+    db = Database(str(tmp_path / "fallback.db"))
+    try:
+        await setup(db)
+        messages = [row["message"] for row in await db.list("message", parent="s")]
+        initial = tokens([{"role": "system", "content": "系统"}] + messages) + tokens([])
+        capacity = int((initial + 64) / (0.95 * 0.9)) + 256
+        events = []
+
+        async def emit(kind, data):
+            events.append(kind)
+
+        async def summary(*args):
+            pytest.fail("不能向过小摘要模型发送超限输入")
+
+        result = await ContextManager(db).build(
+            "s",
+            "current",
+            RuntimeSettings(max_output_tokens=64, summary_tokens=64),
+            {"model": "unknown", "context_capacity": capacity},
+            {"model": "unknown", "context_capacity": 2000},
+            [],
+            "系统",
+            summary,
+            emit,
+        )
+        assert result[1:] == messages
+        assert "context.compaction_failed" in events
+        assert await db.get("summary:s") is None
+    finally:
+        await db.close()
+
+
+async def test_cancelled_summary_does_not_update_coverage(tmp_path):
+    db = Database(str(tmp_path / "cancel.db"))
+    try:
+        await setup(db)
+
+        async def emit(kind, data):
+            pass
+
+        async def summary(*args):
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await ContextManager(db).build(
+                "s",
+                "current",
+                RuntimeSettings(max_output_tokens=64, summary_tokens=64),
+                {"model": "unknown", "context_capacity": 6000},
+                {"model": "unknown", "context_capacity": 16000},
+                [],
+                "系统",
+                summary,
+                emit,
+            )
+        assert await db.get("summary:s") is None
+        assert len(await db.list("message", parent="s")) == 13
+    finally:
+        await db.close()

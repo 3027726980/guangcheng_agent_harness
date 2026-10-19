@@ -1,0 +1,117 @@
+# Agent Harness
+
+从零实现的最小 Agent：原生 Function Calling、自写循环、Pydantic 工具契约、独立 Session、用户共享待办、排队／引导／取消、Context 压缩和执行 Trace。
+
+核心流程没有使用 LangChain、LangGraph、OpenHands 或托管 Agent 服务。前端基于 [PinLayout](https://github.com/3027726980/PinLayout)，保留原 MIT 声明。
+
+## 快速运行
+
+需要 Python 3.12、uv、Node.js 22.6 或以上，以及支持 Chat Completions、Function Calling、流式输出的模型服务。
+
+后端，在 PowerShell 中运行：
+
+```powershell
+Set-Location 'D:\MyProject\guangcheng_agent_harness\backend'
+uv sync --group dev
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+另开一个 PowerShell 运行前端：
+
+```powershell
+Set-Location 'D:\MyProject\guangcheng_agent_harness\fronted'
+npm ci
+npm run dev
+```
+
+打开 [本地界面](http://127.0.0.1:5173)。关闭服务使用 `Ctrl+C`。后端 OpenAPI 位于 [接口文档](http://127.0.0.1:8000/docs)。
+
+1. 进入“全局设置”，填写连接名称、Base URL、API Key 和模型 ID。
+2. 保存会真实调用模型测试连接，并尝试读取 Context；无法读取时使用默认 256K，页面显示来源。
+3. 在“对话模型”中选中连接，保存全局运行设置。摘要模型留空复用对话模型，也可独立配置。
+4. 回到对话页，发送任务，例如“计算 128 乘 36，把结果记入待办”。
+
+输出限制参数默认 `max_tokens`；需要时选择 `max_completion_tokens`。推理强度默认不发送，只有供应商／模型支持时才设置。连接成功只验证基本访问，工具能力仍需用实际任务验收。
+
+模型 Key 在本地 SQLite 保存，接口只回读是否已配置，不回传原值；编辑时留空表示保留。数据库与运行数据均被 Git 忽略。演示用户 A／B 不是登录认证机制，首版默认仅绑定本机地址。
+
+## 目录
+
+```text
+backend/app/       自写 Runtime、模型适配、Context、工具、SQLite、API
+backend/tests/     可重复离线测试，真实 SDK 的假 HTTP 传输测试
+fronted/           Vue + TypeScript + Naive UI
+dev_docs/          规划、设计、接口、十道架构题研究和验证记录
+```
+
+后端入口为 `backend/app/main.py`，执行主链为 `backend/app/runtime.py`。工具定义与处理器在 `tools.py`，参数在 `schemas.py`；新增工具通过 `ToolRegistry.register()` 注册参数模型和处理器。
+
+## 执行模型
+
+```text
+消息入队 → 固定配置快照 → 恢复会话／检查 Context → 调用模型
+                                              ├─ 文本 → 检查引导 → 结束
+                                              └─ 工具 → 校验／执行／保存结果 → 再调用模型
+```
+
+- 同一 Session 顺序执行，不同 Session 可以并行；同用户可打开多个窗口独立对话。
+- `calculator` 和模拟 `search` 可并行，默认上限 4；同批含 `todo` 或未知工具时整批串行。
+- 参数必须完整，结果依赖通过下一次模型调用处理，不实现自动依赖图。
+- `search` 只匹配代码中的固定样例资料，结果始终带 Mock 标记，不访问真实搜索引擎。
+- `todo` 按用户共享，支持增查改、完成、逻辑删除。前端面板和 Agent 共用事务服务，版本检查防止跨窗口静默覆盖。
+- 已执行成功的工具结果才是完成证据；模型口头说“已完成”不构成写入证据。
+
+### 排队、引导、停止
+
+普通发送默认排队。“引导”把补充加入当前任务的下一次模型调用，不中断当前步骤；最终回答期间收到引导也会继续处理，沿用原预算。
+
+手动停止会保留部分输出和操作证据，记录“已被用户手动停止”，清理当前执行后自动开始下一条排队消息。已提交的待办不会被撤销。
+
+断线取消该客户端的当前执行和未执行队列。重连只恢复历史，不自动重新发送。切换会话不关闭连接；其他窗口不受影响。后端只能在检测到断线时执行取消，远端模型停止计算不由本地保证。
+
+服务重启会把遗留任务标记为中断、队列标记取消，恢复工具结果的配对信息，不自动重放工具。继续任务请发送新消息，获得新预算并利用已有历史。
+
+### 预算与重试
+
+默认：模型 20 次、工具 40 次、总时长 300 秒、单次模型 60 秒、单次工具 10 秒、失败后重试 3 次、每次间隔 30 秒。全部可在全局设置中修改，后续开始的任务生效。
+
+重试、摘要计入模型调用次数，等待计入总时长；预算不足会提前结束。仅暂时性网络、限流和上游故障重试，遵循更长的 `Retry-After`。认证、请求错误、Context 超限、不确定写入及已展示部分回答的流失败不透明重试。
+
+## Memory 的恢复时机和放置方式
+
+本项目的聊天记忆是 Session 级短期记忆，不自动跨会话召回聊天。用户待办属于共享业务数据，由工具按需读取，不等于跨会话聊天记忆。
+
+1. 每次模型调用前，从 SQLite 读取当前 Session 消息与摘要，移除已被摘要覆盖的旧消息。
+2. 输入放置顺序为系统指令／工具定义、明确标记的历史摘要、未覆盖的近期交互和当前请求／引导／工具结果。
+3. 已知模型尝试匹配 tokenizer，未知兼容模型使用保守 UTF-8 字节估算；输入计数含消息和 Schema 开销，页面明确是估算。
+4. 可用输入空间扣除输出预留，以及 `max(256, 容量的5%)` 估算余量。
+5. 达到可用空间 80% 触发摘要，目标约 50%；保护当前用户请求与引导、最近完整工具交互。
+6. 旧对话和当前任务较早的已完成步骤可摘要；按摘要模型自身容量分批，成功后才更新覆盖范围。
+7. 摘要失败／停止不覆盖旧摘要；原输入超限时保留历史并停止，必要输入过大时也不强行删除。
+
+完整历史不随压缩删除。后续读取待办时以数据库最新状态为准，旧摘要里的状态不是当前事实。Trace 可查看每次容量估算、压缩前后用量和摘要。
+
+## 验证
+
+```powershell
+Set-Location 'D:\MyProject\guangcheng_agent_harness\backend'
+uv run pytest -q
+uv run ruff check app tests
+uv run ruff format --check app tests
+
+Set-Location 'D:\MyProject\guangcheng_agent_harness\fronted'
+npm test
+npm run build
+```
+
+真实模型需要在页面配置自己的连接。离线假模型只由测试显式注入，生产界面不会自动用假模型替代失败的服务。
+
+详见 [验证记录](dev_docs/verification.md)、[接口与事件](dev_docs/interfaces.md)、[十道架构题备选研究](dev_docs/architecture_study.md) 和 [开发路线](dev_docs/开发路线-2026-10-20.md)。真实供应商的模型行为和真实页面联调不由离线测试代替。
+
+## Git
+
+`main` 保留原题与规划基线，`dev/runtime` 进行开发；每批验证后提交。GitHub 关联私有空仓库 `3027726980/guangcheng_agent_harness`，遵守用户要求不推送。当前 Git 状态与实际提交以 `git status`、`git log --all --oneline` 为准。
+
+## 来源与扩展
+
+PinLayout 采用 MIT 许可，原声明保存在 `fronted/LICENSE`。后续扩展 Jev 前置决策、真实搜索、多模态和必要时的 Decisions API，均不改变首版统一 Agent 的可独立运行能力。

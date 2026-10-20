@@ -1,3 +1,6 @@
+# 作者：LHF。
+# 时间：2026-10-20。
+# 作用：验证 test_runtime 所覆盖的行为与边界，使用离线数据及临时资源。
 import asyncio
 import json
 
@@ -12,13 +15,16 @@ from app.storage import Database, uid
 
 
 async def wait_until(predicate, timeout=4):
+    # 作用：在超时范围内轮询异步条件，等待后台任务达到可断言的状态。
     async with asyncio.timeout(timeout):
         while not await predicate():
             await asyncio.sleep(0.005)
 
 
 async def terminal(rt, key):
+    # 作用：等待指定任务进入终态，再返回数据库中的最终记录。
     async def check():
+        # 作用：读取任务状态，判断其是否已经进入终态。
         return (await rt.db.get(key))["status"] in {"completed", "cancelled", "failed", "limited"}
 
     await wait_until(check)
@@ -27,10 +33,12 @@ async def terminal(rt, key):
 
 @pytest_asyncio.fixture
 async def harness(tmp_path):
+    # 作用：创建离线 Runtime、演示用户、模型配置和已连接客户端，并在结束时释放资源。
     model = ScriptedModel([])
     waits = []
 
     async def sleep(delay):
+        # 作用：记录重试等待时长并让出事件循环，不进行真实长时间等待。
         waits.append(delay)
         await asyncio.sleep(0)
 
@@ -58,6 +66,7 @@ async def harness(tmp_path):
 
 
 async def send(rt, client, session, content="你好", request_id=None):
+    # 作用：使用当前测试客户端提交聊天任务，缺省时生成唯一请求 ID。
     return await rt.submit(
         session["id"],
         "A",
@@ -66,6 +75,7 @@ async def send(rt, client, session, content="你好", request_id=None):
 
 
 async def test_direct_reply_and_request_deduplication(harness):
+    # 作用：验证直接回答正常完成，重复请求不会创建第二个任务。
     rt, model, client, session, _ = harness
     model.replies = [ModelReply(text="你好")]
     run = await send(rt, client, session, request_id="request-1234")
@@ -79,6 +89,7 @@ async def test_direct_reply_and_request_deduplication(harness):
 
 
 async def test_tool_loop_followup_and_session_isolation(harness):
+    # 作用：验证多轮工具结果进入追问上下文，不泄漏到其他会话。
     rt, model, client, session, _ = harness
     model.replies = [
         ModelReply(calls=[ToolCall(id="calc1", name="calculator", arguments='{"expression":"128*36"}')]),
@@ -103,6 +114,7 @@ async def test_tool_loop_followup_and_session_isolation(harness):
 
 
 async def test_three_retries_and_model_budget(harness):
+    # 作用：验证重试间隔及次数，并在模型调用预算不足时停止。
     rt, model, client, session, waits = harness
     model.replies = [ModelFailure("网络失败", True) for _ in range(3)] + [ModelReply(text="恢复")]
     run = await send(rt, client, session)
@@ -123,9 +135,11 @@ async def test_three_retries_and_model_budget(harness):
 
 
 async def test_partial_output_failure_is_not_retried(harness):
+    # 作用：验证已输出部分正文后失败不重试，部分内容仍保存。
     rt, model, client, session, waits = harness
 
     async def partial(messages, on_text):
+        # 作用：输出一段正文后抛出可重试错误，用于检查部分输出不重试。
         await on_text("部分输出")
         raise ModelFailure("流失败", True)
 
@@ -138,10 +152,12 @@ async def test_partial_output_failure_is_not_retried(harness):
 
 
 async def test_final_answer_steering_remains_in_current_task(harness):
+    # 作用：验证临近完成时收到的引导仍由当前任务消费。
     rt, model, client, session, _ = harness
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def answer(messages, on_text):
+        # 作用：等待测试释放事件后返回初稿，模拟回答完成前收到引导。
         entered.set()
         await release.wait()
         return ModelReply(text="初稿")
@@ -158,10 +174,12 @@ async def test_final_answer_steering_remains_in_current_task(harness):
 
 
 async def test_manual_stop_advances_queue_but_disconnect_cancels_it(harness):
+    # 作用：验证手动停止后推进下一排队任务，而断连取消整个客户端队列。
     rt, model, client, session, _ = harness
     entered = asyncio.Event()
 
     async def block(messages, on_text):
+        # 作用：阻塞模拟模型直至测试释放或取消，用于手动停止后推进下一排队任务，而断连取消整个客户端队列。
         await on_text("正在输出")
         entered.set()
         await asyncio.Event().wait()
@@ -185,6 +203,7 @@ async def test_manual_stop_advances_queue_but_disconnect_cancels_it(harness):
 
 
 async def test_truncated_tool_response_is_never_executed(harness):
+    # 作用：验证被截断的工具参数不会产生写入或其他工具执行。
     rt, model, client, session, _ = harness
     model.replies = [
         ModelReply(
@@ -201,6 +220,7 @@ async def test_truncated_tool_response_is_never_executed(harness):
 
 
 async def test_tool_budget_blocks_entire_batch(harness):
+    # 作用：验证工具预算不足时整批拒绝执行，不部分执行后超额。
     rt, model, client, session, _ = harness
     settings = (await rt.settings()).model_copy(update={"max_tool_calls": 1})
     await rt.db.put("settings", {"id": "runtime-settings", **settings.model_dump()})
@@ -218,10 +238,12 @@ async def test_tool_budget_blocks_entire_batch(harness):
 
 
 async def test_settings_snapshot_and_two_window_isolation(harness):
+    # 作用：验证运行设置按任务固定快照，不同客户端取消状态互不影响。
     rt, model, client, session, _ = harness
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def block(messages, on_text):
+        # 作用：阻塞模拟模型直至测试释放或取消，用于运行设置按任务固定快照，不同客户端取消状态互不影响。
         entered.set()
         await release.wait()
         return ModelReply(text="窗口一")
@@ -245,6 +267,7 @@ async def test_settings_snapshot_and_two_window_isolation(harness):
 
 @pytest.mark.parametrize("problem", ["missing", "failed", "summary_missing", "capacity"])
 async def test_invalid_configuration_rejected_before_queueing(harness, problem):
+    # 作用：验证缺失、未测试或容量不足的模型配置不能入队。
     rt, model, client, session, _ = harness
     settings = (await rt.settings()).model_dump()
     if problem == "missing":
@@ -264,10 +287,12 @@ async def test_invalid_configuration_rejected_before_queueing(harness, problem):
 
 
 async def test_deletion_rejects_busy_session_then_hides_history(harness):
+    # 作用：验证有任务的会话不能删除，空闲后删除隐藏会话并保留历史证据。
     rt, model, client, session, _ = harness
     entered = asyncio.Event()
 
     async def block(messages, on_text):
+        # 作用：阻塞模拟模型直至测试释放或取消，用于有任务的会话不能删除，空闲后删除隐藏会话并保留历史证据。
         entered.set()
         await asyncio.Event().wait()
 
@@ -292,10 +317,12 @@ async def test_deletion_rejects_busy_session_then_hides_history(harness):
 
 
 async def test_queued_message_can_be_atomically_promoted_to_current_run(harness):
+    # 作用：验证排队消息原子地转为当前任务引导，重复转换保持幂等。
     rt, model, client, session, _ = harness
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def block(messages, on_text):
+        # 作用：阻塞模拟模型直至测试释放或取消，用于排队消息原子地转为当前任务引导，重复转换保持幂等。
         entered.set()
         await release.wait()
         return ModelReply(text="初稿")
@@ -326,6 +353,7 @@ async def test_queued_message_can_be_atomically_promoted_to_current_run(harness)
 
 
 async def test_promoting_after_current_task_finishes_preserves_queue(harness):
+    # 作用：验证当前任务已结束时拒绝转换引导，原排队消息继续保留。
     rt, _, client, session, _ = harness
     queued = {
         "id": "pending",

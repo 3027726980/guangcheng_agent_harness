@@ -1,3 +1,6 @@
+# 作者：LHF。
+# 时间：2026-10-20。
+# 作用：验证 test_recovery 所覆盖的行为与边界，使用离线数据及临时资源。
 import asyncio
 import json
 
@@ -8,6 +11,7 @@ from tests.test_runtime import send, terminal
 
 
 async def test_tool_parallel_limit_and_result_order(harness):
+    # 作用：验证并行工具受并发限制，结果仍按声明顺序回填。
     rt, model, client, session, _ = harness
     settings = (await rt.settings()).model_copy(update={"tool_concurrency": 2})
     await rt.db.put("settings", {"id": "runtime-settings", **settings.model_dump()})
@@ -15,6 +19,7 @@ async def test_tool_parallel_limit_and_result_order(harness):
     two_started = asyncio.Event()
 
     async def execute(call, db, owner, operation):
+        # 作用：模拟工具执行及其并发或提交时机，用于并行工具受并发限制，结果仍按声明顺序回填。
         nonlocal active, peak
         active += 1
         peak = max(active, peak)
@@ -46,10 +51,12 @@ async def test_tool_parallel_limit_and_result_order(harness):
 
 
 async def test_batch_with_todo_is_sequential(harness):
+    # 作用：验证包含待办的整批工具按顺序执行。
     rt, model, client, session, _ = harness
     active, peak = 0, 0
 
     async def execute(call, db, owner, operation):
+        # 作用：模拟工具执行及其并发或提交时机，用于包含待办的整批工具按顺序执行。
         nonlocal active, peak
         active += 1
         peak = max(active, peak)
@@ -73,11 +80,13 @@ async def test_batch_with_todo_is_sequential(harness):
 
 
 async def test_cancel_during_committed_write_preserves_result(harness):
+    # 作用：验证取消期间已提交的写操作结果被保留，不误报未执行。
     rt, model, client, session, _ = harness
     original = rt.registry.execute
     committed, release = asyncio.Event(), asyncio.Event()
 
     async def execute(call, db, owner, operation):
+        # 作用：模拟工具执行及其并发或提交时机，用于取消期间已提交的写操作结果被保留，不误报未执行。
         result = await original(call, db, owner, operation)
         committed.set()
         await release.wait()
@@ -102,11 +111,13 @@ async def test_cancel_during_committed_write_preserves_result(harness):
 
 
 async def test_total_timeout_is_terminal(harness):
+    # 作用：验证执行超过总时长后进入终态并完成收尾。
     rt, model, client, session, _ = harness
     settings = (await rt.settings()).model_copy(update={"max_seconds": 0.08})
     await rt.db.put("settings", {"id": "runtime-settings", **settings.model_dump()})
 
     async def block(messages, on_text):
+        # 作用：阻塞模拟模型直至测试释放或取消，用于执行超过总时长后进入终态并完成收尾。
         await asyncio.Event().wait()
 
     model.replies = [block]
@@ -115,6 +126,7 @@ async def test_total_timeout_is_terminal(harness):
 
 
 async def test_restart_marks_runs_and_recovers_committed_tool_result(tmp_path):
+    # 作用：验证重启修复未结束任务，并从操作凭据恢复已提交工具结果。
     path = str(tmp_path / "restart.db")
     db = Database(path)
     await db.initialize()

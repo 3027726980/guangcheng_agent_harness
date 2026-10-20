@@ -1,3 +1,6 @@
+# 作者：LHF。
+# 时间：2026-10-20。
+# 作用：验证 test_api 所覆盖的行为与边界，使用离线数据及临时资源。
 import asyncio
 
 from fastapi.testclient import TestClient
@@ -12,6 +15,7 @@ from tests.test_runtime import send, terminal
 
 class ProbeModel(ScriptedModel):
     async def probe(self, profile):
+        # 作用：返回固定的离线连接探测结果，避免测试发起真实请求。
         return {
             "connected": True,
             "context_capacity": 262144,
@@ -20,7 +24,31 @@ class ProbeModel(ScriptedModel):
         }
 
 
+def test_manual_todos_use_the_same_tool_registry(tmp_path):
+    # 作者：LHF；时间：2026-10-20；作用：验证手动读写待办也经过统一工具注册表。
+    app = create_app(str(tmp_path / "registry.db"), ProbeModel([]))
+    registry = app.state.runtime.registry
+    original = registry.execute
+    calls = []
+
+    async def execute(call, db, user_id, operation_id):
+        # 作用：记录入口并委托真实工具，检查身份、参数和幂等键没有改变。
+        calls.append((call, user_id, operation_id))
+        return await original(call, db, user_id, operation_id)
+
+    registry.execute = execute
+    with TestClient(app) as client:
+        assert client.post("/api/todos", headers={"Idempotency-Key": "registry-1"},
+                           json={"action": "add", "title": "统一调用"}).status_code == 200
+        assert len(client.get("/api/todos").json()["items"]) == 1
+    assert [call.name for call, _, _ in calls] == ["todo", "todo"]
+    assert [owner for _, owner, _ in calls] == ["A", "A"]
+    assert calls[0][2] == "manual:A:registry-1"
+    assert calls[1][2].startswith("read:")
+
+
 def test_api_identity_models_settings_and_shared_todos(tmp_path):
+    # 作用：验证演示身份隔离、模型配置、运行设置、共享待办与会话删除接口。
     app = create_app(str(tmp_path / "api.db"), ProbeModel([ModelReply(text="OK")]))
     with TestClient(app) as client:
         profile = client.post(
@@ -78,10 +106,12 @@ def test_api_identity_models_settings_and_shared_todos(tmp_path):
 
 
 async def test_sse_disconnect_cancels_owned_active_and_queued_runs(harness, tmp_path):
+    # 作用：验证 SSE 断开后只取消该客户端的运行任务和排队任务。
     fixture_rt, _, _, _, _ = harness
     entered, ready, disconnected = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def block(messages, on_text):
+        # 作用：阻塞模拟模型直至测试释放或取消，用于 SSE 断开后只取消该客户端的运行任务和排队任务。
         entered.set()
         await asyncio.Event().wait()
 
@@ -89,6 +119,7 @@ async def test_sse_disconnect_cancels_owned_active_and_queued_runs(harness, tmp_
     first_request = True
 
     async def receive():
+        # 作用：模拟 ASGI 接收客户端请求与断开通知。
         nonlocal first_request
         if first_request:
             first_request = False
@@ -97,6 +128,7 @@ async def test_sse_disconnect_cancels_owned_active_and_queued_runs(harness, tmp_
         return {"type": "http.disconnect"}
 
     async def output(message):
+        # 作用：接收模拟输出，供测试观察事件发送或流错误。
         if message["type"] == "http.response.body" and b"event: ready" in message.get("body", b""):
             ready.set()
 
@@ -132,6 +164,7 @@ async def test_sse_disconnect_cancels_owned_active_and_queued_runs(harness, tmp_
 
 
 def test_session_list_reports_only_owned_pending_runs(tmp_path):
+    # 作用：验证会话列表只返回当前用户的会话及未结束任务概要。
     app = create_app(str(tmp_path / "activity.db"), ProbeModel([]))
     with TestClient(app) as client:
         first = client.post("/api/sessions", json={"title": "窗口一"}).json()

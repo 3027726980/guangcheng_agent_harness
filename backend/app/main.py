@@ -26,9 +26,10 @@ from app.schemas import (
     SessionCreate,
     SteeringRequest,
     TodoArgs,
+    ToolCall,
 )
 from app.storage import Database, uid
-from app.tools import ToolError, todo
+from app.tools import ToolError
 
 
 def public_profile(profile):
@@ -211,7 +212,9 @@ def create_app(database_path=None, model=None):
     @app.get("/api/todos")
     async def todos(owner=Depends(user)):
         # 接口 GET /api/todos：查询当前用户跨会话共享且未删除的待办。
-        return await todo(runtime.db, owner, TodoArgs(action="list"), "read:" + uid())
+        operation = "read:" + uid()
+        call = ToolCall(id=operation, name="todo", arguments=TodoArgs(action="list").model_dump_json())
+        return await runtime.registry.execute(call, runtime.db, owner, operation)
 
     @app.post("/api/todos")
     async def change_todo(body: TodoArgs, request: Request, owner=Depends(user)):
@@ -219,7 +222,9 @@ def create_app(database_path=None, model=None):
         operation = request.headers.get("Idempotency-Key")
         if not operation or len(operation) > 100:
             raise DomainError("写入需要不超过100字符的 Idempotency-Key")
-        result = await todo(runtime.db, owner, body, f"manual:{owner}:{operation}")
+        operation_id = f"manual:{owner}:{operation}"
+        call = ToolCall(id=uid(), name="todo", arguments=body.model_dump_json())
+        result = await runtime.registry.execute(call, runtime.db, owner, operation_id)
         await runtime.emit("todo.changed", {}, user_id=owner)
         return result
 

@@ -76,6 +76,8 @@ npm run dev
 
 ## 目录
 
+入门请先看 [新版三天学习指导路线](dev_docs/backend_learning_3days.md)：每天 3–4 小时，串起对话、模型适配、工具、Agent Loop、Context、Session、持久化与 Trace，附精读行段、练习和验收标准；[核心链路导航](dev_docs/core_chains_3days.md) 用于快速选读。
+
 ```text
 backend/app/       自写 Runtime、模型适配、Context、工具、SQLite、API
 backend/tests/     可重复离线测试，真实 SDK 的假 HTTP 传输测试
@@ -83,7 +85,7 @@ fronted/           Vue + TypeScript + Naive UI
 dev_docs/          规划、设计、接口、十道架构题研究和验证记录
 ```
 
-后端入口为 `backend/app/main.py`，执行主链为 `backend/app/runtime.py`。工具定义与处理器在 `tools.py`，参数在 `schemas.py`；新增工具通过 `ToolRegistry.register()` 注册参数模型和处理器。
+后端入口为 `backend/app/main.py`，执行主链为 `backend/app/runtime.py`。工具统一继承 `tools.py` 中的抽象基类 `BaseTool`，声明名称、描述、Pydantic 参数模型和执行策略，实现异步 `execute(args, db, user_id, operation_id)`，再通过 `ToolRegistry.register()` 注册。基类提供统一 Schema；注册表负责检查工具契约、严格校验参数并调用实例。内置实现为 `CalculatorTool`、`SearchTool`、`TodoTool`；Agent 调用与手动待办接口都经 `ToolRegistry.execute()` 执行。
 
 ## 执行模型
 
@@ -152,7 +154,7 @@ npm run build
 
 ## 后端学习
 
-三天深入导读见 [后端学习路线](dev_docs/backend_learning_3days.md)，包含每日阅读范围、核心函数、断点、练习与验收；按函数查位置可使用 [源码与测试符号索引](dev_docs/backend_source_index.md)。
+三天学习统一使用 [新版后端指导路线](dev_docs/backend_learning_3days.md)，每天 3–4 小时，以能读懂并修改代码为目标，包含每日阅读顺序、核心链路、练习与验收；按函数查位置可使用 [源码与测试符号索引](dev_docs/backend_source_index.md)。
 
 ## Git
 

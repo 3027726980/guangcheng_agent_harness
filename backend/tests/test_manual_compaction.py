@@ -1,3 +1,6 @@
+# 作者：LHF。
+# 时间：2026-10-20。
+# 作用：验证 test_manual_compaction 所覆盖的行为与边界，使用离线数据及临时资源。
 import asyncio
 import json
 
@@ -12,6 +15,7 @@ from tests.test_runtime import terminal
 
 
 async def history(rt, session):
+    # 作用：创建可压缩的会话历史，供手动压缩场景复用。
     for index in range(3):
         for role in ("user", "assistant"):
             await rt.db.put(
@@ -27,6 +31,7 @@ async def history(rt, session):
 
 
 async def compact(rt, client, session, request_id=None, user="A"):
+    # 作用：使用当前客户端提交手动压缩任务，允许指定请求 ID 和用户。
     return await rt.submit(
         session["id"],
         user,
@@ -39,6 +44,7 @@ async def compact(rt, client, session, request_id=None, user="A"):
 
 
 async def test_manual_compaction_below_threshold_preserves_last_turn_and_history(harness):
+    # 作用：验证手动压缩可在阈值以下执行，并保留最近一轮和全部原历史。
     rt, model, client, session, _ = harness
     original = await history(rt, session)
     model.replies = [ModelReply(text="用户约束摘要")]
@@ -57,6 +63,7 @@ async def test_manual_compaction_below_threshold_preserves_last_turn_and_history
 
 
 async def test_empty_manual_compaction_skips_model(harness):
+    # 作用：验证没有历史可压缩时跳过模型调用。
     rt, model, client, session, _ = harness
     run = await compact(rt, client, session)
     result = await terminal(rt, run["id"])
@@ -66,6 +73,7 @@ async def test_empty_manual_compaction_skips_model(harness):
 
 
 async def test_longer_summary_is_not_committed(harness):
+    # 作用：验证摘要使上下文变长时不覆盖已有摘要。
     rt, model, client, session, _ = harness
     original = await history(rt, session)
     model.replies = [ModelReply(text="过长摘要" * 500)]
@@ -78,11 +86,13 @@ async def test_longer_summary_is_not_committed(harness):
 
 
 async def test_reasoning_summary_uses_provider_default_instead_of_text_target_cap(harness):
+    # 作用：验证摘要请求使用供应商默认输出长度，不设置固定正文上限。
     rt, _, client, session, _ = harness
     original = await history(rt, session)
     payloads = []
 
     def respond(request):
+        # 作用：构造假 HTTP 响应并检查请求参数，用于摘要请求使用供应商默认输出长度，不设置固定正文上限。
         payload = json.loads(request.content)
         payloads.append(payload)
         capped = "max_tokens" in payload or "max_completion_tokens" in payload
@@ -122,6 +132,7 @@ async def test_reasoning_summary_uses_provider_default_instead_of_text_target_ca
 
 
 async def test_provider_truncated_summary_reports_reason_and_keeps_prior_summary(harness):
+    # 作用：验证供应商截断摘要时明确失败并保留旧摘要。
     rt, model, client, session, _ = harness
     original = await history(rt, session)
     prior = {"id": "summary:" + session["id"], "text": "原摘要", "covered": [original[0]["id"]]}
@@ -136,11 +147,13 @@ async def test_provider_truncated_summary_reports_reason_and_keeps_prior_summary
 
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_manual_compaction_exclusion_failure_and_cancel_preserve_coverage(harness, cancel):
+    # 作用：验证压缩任务互斥，失败或取消不会修改原覆盖范围。
     rt, model, client, session, _ = harness
     original = await history(rt, session)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def summary(messages, on_text):
+        # 作用：模拟摘要返回、失败或等待，用于压缩任务互斥，失败或取消不会修改原覆盖范围。
         entered.set()
         await release.wait()
         raise ModelFailure("模拟摘要失败")

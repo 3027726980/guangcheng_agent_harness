@@ -73,6 +73,10 @@
 
 会话列表的 active_runs 仅包含当前用户 queued／running／cancelling 任务。前端在筛选当前会话事件之前更新全列表活动状态；列表请求期间收到的任务事件优先于旧 HTTP 快照，避免已结束任务重新显示转圈。事件连接就绪后重新获取列表以恢复状态。
 
+## 工具注册契约
+
+工具内部契约：`BaseTool` 是抽象基类，子类声明 `name`、`description`、`arguments`（Pydantic 模型）和 `execution_mode`（parallel／sequential），实现 `async execute(args, db, user_id, operation_id)`。基类 `schema()` 生成函数声明；`ToolRegistry.register()` 校验继承、异步方法、元数据及重名，`execute()` 校验参数后统一分发。Agent 和手动待办接口都通过注册表，HTTP 路径及响应格式不变。同步计算与样例检索封装在异步方法中，仍在当前线程执行，不代表自动进入线程池。
+
 ## SQLite
 
 首版使用 `records` 存储按 kind、owner、parent 索引的业务记录，使用 `events` 存储有序执行事件。JSON payload 让初版结构保持小而可读；多类型复杂查询和正式迁移属于后续演进点。

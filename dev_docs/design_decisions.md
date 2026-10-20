@@ -9,6 +9,8 @@
 | 核心 | 自写统一 Agent Loop，原生 Function Calling |
 | 意图路由 | 首版不使用 Jev 或 Decisions；后续扩展 |
 | 工具 | 待办、计算、模拟搜索 |
+| 工具契约 | 统一继承 BaseTool，实现异步 execute；通过 ToolRegistry 注册、校验和调用，手动待办也走同一入口 |
+| 学习文档 | backend_learning_3days.md 是唯一完整路线，每天 3–4 小时；core_chains_3days.md 仅导航；源码索引按当前代码静态生成 |
 | 用户 | 预置 A／B，无登录注册 |
 | 会话 | 同 Session 顺序，不同 Session 可并行，多窗口独立选择 |
 | 待办 | 用户级跨 Session 共享，版本冲突检查 |

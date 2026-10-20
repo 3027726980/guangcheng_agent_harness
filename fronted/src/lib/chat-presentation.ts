@@ -1,3 +1,6 @@
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：会话状态、聊天消息和执行链路的展示数据转换。
 import type {
   Message,
   Profile,
@@ -10,10 +13,12 @@ export function updateSessionActivity(
   sessions: Session[],
   run: Pick<Run, "id" | "session_id" | "status">,
 ) {
-  const session = sessions.find((item) => item.id === run.session_id);
+  // 作用：根据最新任务状态更新会话的活跃任务概要。
+  // 用最新任务状态替换侧栏记录，终态任务从活跃列表移除。
+  const session = sessions.find(/* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (item) => item.id === run.session_id);
   if (!session) return;
   const active = (session.active_runs || []).filter(
-    (item) => item.id !== run.id,
+    /* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (item) => item.id !== run.id,
   );
   if (["queued", "running", "cancelling"].includes(run.status))
     active.push({ id: run.id, status: run.status });
@@ -21,10 +26,11 @@ export function updateSessionActivity(
 }
 
 export function sessionActivityLabel(session: Session) {
+  // 作用：将运行、排队和停止状态转换为侧栏可读提示。
   const runs = session.active_runs || [];
-  if (runs.some((run) => run.status === "cancelling")) return "正在停止任务";
-  const running = runs.filter((run) => run.status === "running").length;
-  const queued = runs.filter((run) => run.status === "queued").length;
+  if (runs.some(/* 作用：检查是否存在符合当前条件的记录。 */ (run) => run.status === "cancelling")) return "正在停止任务";
+  const running = runs.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (run) => run.status === "running").length;
+  const queued = runs.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (run) => run.status === "queued").length;
   return running
     ? `任务执行中${queued ? `，${queued} 条排队` : ""}`
     : queued
@@ -37,6 +43,8 @@ export function configurationIssue(
   settings: Record<string, any>,
   profiles: Profile[],
 ): string {
+  // 作用：检查模型配置是否就绪，返回阻止发送的具体原因。
+  // 提交前的页面提示与后端容量检查保持一致；最终是否接受请求仍以后端为准。
   if (status === "loading") return "正在读取模型与运行配置，请稍候。";
   if (status !== "ready")
     return "未能读取运行配置，请重试或前往全局设置检查连接。";
@@ -47,7 +55,7 @@ export function configurationIssue(
       settings.summary_profile_id || settings.default_profile_id,
     ],
   ] as const) {
-    const profile = profiles.find((item) => item.id === id);
+    const profile = profiles.find(/* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (item) => item.id === id);
     if (!profile) return `请先在全局设置中配置并选择${label}模型。`;
     if (!profile.base_url?.trim() || !profile.model?.trim())
       return `${label}模型缺少地址或模型 ID，请补全配置。`;
@@ -64,6 +72,7 @@ export function configurationIssue(
   return "";
 }
 
+/** 作用：聊天区显示的一条正文消息或一组工具交互。 */
 export interface ConversationItem {
   id: string;
   kind: "message" | "tools";
@@ -71,6 +80,8 @@ export interface ConversationItem {
 }
 
 export function conversationItems(messages: Message[]): ConversationItem[] {
+  // 作用：把协议消息整理为正文气泡和可折叠工具步骤，并保留思考元数据。
+  // 将原始协议消息转换成文本气泡和工具步骤，避免直接展示 role=tool 的 JSON。
   const result: ConversationItem[] = [];
   const pending = new Map<string, ConversationItem>();
   for (const row of messages) {
@@ -82,8 +93,8 @@ export function conversationItems(messages: Message[]): ConversationItem[] {
     }
     pending.clear();
     const calls = row.message.tool_calls || [];
-    // Keep public assistant text at its original position, outside collapsed details.
-    if (!calls.length || row.message.content?.trim()) {
+    // 保留 assistant 正文的原始位置，不把用户可读内容藏进工具折叠区域。
+    if (!calls.length || row.message.content?.trim() || row.reasoning) {
       result.push({
         id: row.id,
         kind: "message",
@@ -97,6 +108,7 @@ export function conversationItems(messages: Message[]): ConversationItem[] {
         rows: [
           {
             ...row,
+            reasoning: undefined,
             message: { ...row.message, content: null, tool_calls: [call] },
           },
         ],
@@ -106,6 +118,7 @@ export function conversationItems(messages: Message[]): ConversationItem[] {
     }
   }
   const grouped: ConversationItem[] = [];
+  // 同一任务相邻的工具条目合并为步骤组，但不能跨任务混在一起。
   for (const item of result) {
     const last = grouped[grouped.length - 1];
     if (
@@ -120,6 +133,8 @@ export function conversationItems(messages: Message[]): ConversationItem[] {
 }
 
 export function contextSnapshot(events: TraceEvent[]) {
+  // 作用：按事件顺序还原上下文估算，压缩后使用新的用量。
+  // 按事件顺序还原最后一次用量估算，压缩完成后用 after 更新显示值。
   let usage: Record<string, any> | undefined;
   for (const event of events) {
     if (event.type === "context.usage") usage = { ...event.data };
@@ -130,6 +145,7 @@ export function contextSnapshot(events: TraceEvent[]) {
 }
 
 export function eventLabel(type: string) {
+  // 作用：将执行事件类型转换为中文名称，未知类型保留原值。
   return (
     (
       {
@@ -153,6 +169,7 @@ export function eventLabel(type: string) {
 }
 
 export function runStatus(status: string, reason?: string) {
+  // 作用：将任务状态和排队转引导原因转换为可读标签。
   if (reason === "converted_to_steering") return "已转为引导";
   return (
     (
@@ -171,13 +188,15 @@ export function runStatus(status: string, reason?: string) {
 }
 
 export function traceSteps(events: TraceEvent[]) {
+  // 作用：按任务及调用 ID 聚合链路步骤，并标出失败事件。
+  // 按任务、事件类别和调用 ID 聚合开始/结束事件，便于逐步查看完整执行链路。
   const steps = new Map<
     string,
     { id: string; label: string; events: TraceEvent[]; failed: boolean }
   >();
   for (const event of events) {
-    // Text deltas are represented by saved messages; the drawer focuses on execution steps.
-    if (["model.delta", "message.created"].includes(event.type)) continue;
+    // 正文已由聊天区展示，链路抽屉忽略逐字输出和消息事件，减少重复信息。
+    if (["model.delta", "model.reasoning.delta", "message.created"].includes(event.type)) continue;
     const family = event.type.split(".")[0];
     const key = event.data.call_id
       ? `${event.run_id}:${family}:${event.data.call_id}`

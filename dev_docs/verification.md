@@ -2,6 +2,14 @@
 
 日期：2026-10-20。本文件仅记录实际完成的检查。离线验证不能替代真实供应商验收。
 
+## 2026-10-20 推送前复核：工具偏好与模型兼容
+
+- 后端在 backend 目录使用 `.venv/Scripts/python.exe -m pytest -q`：93 passed，12.52 秒；`-m ruff check app tests` 通过。
+- 前端 `npm test`：11 passed；`npm run build`：Vue／TypeScript 检查和 Vite 构建通过。
+- 工具偏好用例覆盖：参数不足先澄清、正常调用后带结果追问、多个提及去重并跳过前项、使用未提及工具、运行中引导、排队转引导、未知名称拒绝及压缩后保留提示。
+- SDK MockTransport 检查 `tool_choice=auto`、所有工具保留、DeepSeek 思考启用／关闭及原生思考回传；前端离线检查提及边界和仅工具响应时的思考展示。
+- 本次未启动或重启服务、未调用真实模型、未进行新一轮浏览器验收。运行中的后端需加载最新代码后才能使用新语义，真实供应商的具体选择仍需手动验收。
+
 ## Windows 快速启动脚本补充
 
 参考 `D:\MyProject\Pin\backend\scripts-dev\quick-start` 的三个入口，新增 `backend/scripts-dev/quick-start/main.bat`、`backend.bat`、`frontend.bat`，由共用 `start.ps1` 定位目录、检查依赖与端口、启动服务。

@@ -13,15 +13,16 @@
 | --- | --- | --- |
 | GET | `/health` | Runtime 与演示身份标记 |
 | GET | `/users` | A／B 演示用户 |
+| GET | `/tools` | 注册工具的 name、description，供前端 @ 菜单使用；校验演示身份 |
 | POST | `/clients` | 生成窗口客户端 ID |
 | GET | `/events?client_id=…` | SSE；一个客户端一个连接，首先发送 ready |
 | POST | `/clients/{id}/disconnect` | 显式断开对应客户端 |
 | GET / POST | `/sessions` | 会话列表附 active_runs（仅任务 ID／状态）／以 title 创建会话 |
 | GET | `/sessions/{id}` | 会话、消息、执行、摘要、最近事件 |
 | DELETE | `/sessions/{id}` | 按用户归属逻辑删除；有运行／排队任务时返回 409，共享待办保留 |
-| POST | `/sessions/{id}/messages` | client_id、request_id、content；返回任务与队列状态 |
+| POST | `/sessions/{id}/messages` | client_id、request_id、content、可选 tool_names；返回任务与队列状态 |
 | POST | `/sessions/{id}/compact` | client_id、request_id；空闲会话创建独立压缩任务，返回普通任务状态；忙碌返回 409，支持原停止接口 |
-| POST | `/runs/{id}/steering` | request_id、content；只接受运行中的任务 |
+| POST | `/runs/{id}/steering` | request_id、content、可选 tool_names；只接受运行中的任务 |
 | POST | `/runs/{id}/steer-queued` | 将当前用户的该条排队消息转为同 Session 当前任务的引导；原子转换、重复请求幂等；无可引导任务时返回 409 并保留队列 |
 | POST | `/runs/{id}/cancel` | 按明确任务 ID 停止 |
 | GET | `/todos` | 当前用户未删除待办 |
@@ -31,7 +32,11 @@
 | PUT / DELETE | `/models/{id}` | 修改并测试／删除未被选用的连接 |
 | POST | `/models/{id}/test` | 重新测试连接和容量 |
 
-模型配置可指定 `output_token_parameter` 为 `max_tokens` 或 `max_completion_tokens`；可选 `reasoning_effort`，不支持时留空。后端不偷偷重发另一套参数，以免绕过预算或隐藏兼容错误。
+模型配置可指定 `output_token_parameter` 为 `max_tokens` 或 `max_completion_tokens`；思考只提供 `thinking_enabled` 布尔开关，新连接默认关闭，不发送强度参数。旧记录的 `reasoning_effort` 仅用于恢复开关，不对外返回。后端不偷偷重发另一套参数，以免绕过预算或隐藏兼容错误。
+
+`tool_names` 默认空列表，最多 16 项；后端校验注册名称并去重，未知名称入队前拒绝。它表示用户偏好，不是强制执行列表。所有工具继续提供给模型，`tool_choice=auto`；不要求按提及顺序或逐个使用，信息不足可先询问，也可直接回答或使用其他适用工具。实际参数仍由工具层严格验证。
+
+偏好随请求和引导以消息外层 `tool_names` 元数据持久化；Context 向对应用户消息副本追加提示，参与 token 预算和摘要压缩，数据库中的原正文不变。排队转引导保留相同偏好，无提及的消息不额外注入提示。
 
 ## 执行与消息
 
@@ -43,6 +48,8 @@
 
 消息保存 role/content、工具请求及 tool_call_id；应用元数据另存消息 ID、任务 ID、输入类别和时间。模型输入不重放残缺参数。修复未配对工具调用时，优先读取已提交操作证据，否则补中断结果。
 
+展示思考保存在外层 `reasoning`，原生协议思考保存在 `message.reasoning_content` 并原样回传；展示文本可包含正文 think 标签提取的内容，不能替换新的原生协议字段。
+
 ## SSE 事件
 
 普通事件包含：`id`、`user_id`、`session_id`、`run_id`、`type`、`timestamp`、`data`。
@@ -52,6 +59,7 @@
 | `run.updated` | 任务状态、计数、设置快照和原因，不包含密钥 |
 | `message.created` | 已持久化消息 |
 | `model.started / delta / finished / failed / retry` | 调用 ID、用途、模型、内容增量、用量、重试原因和等待 |
+| `model.reasoning.delta` | call_id、text；独立思考增量，不混入回答正文 |
 | `tool.started / finished` | 调用 ID、名称、参数、结果、错误、耗时 |
 | `steering.updated` | pending / applied / unprocessed |
 | `context.usage / compacting / compacted / compaction_failed` | 估算、容量来源、覆盖范围、摘要及失败状态 |

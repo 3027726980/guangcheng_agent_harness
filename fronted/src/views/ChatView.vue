@@ -13,7 +13,7 @@
       >
         <button
           class="session-select"
-          @click="safely(() => selectSession(session.id))"
+          @click="safely(/* 作用：加载点击的会话并切换聊天视图。 */ () => selectSession(session.id))"
         >
           {{ session.title }}<small>{{ session.id.slice(0, 8) }}</small>
         </button>
@@ -25,7 +25,7 @@
           :title="sessionActivityLabel(session)"
         />
         <n-popconfirm
-          @positive-click="safely(() => deleteSession(session.id))"
+          @positive-click="safely(/* 作用：确认后删除该会话并刷新选择。 */ () => deleteSession(session.id))"
           positive-text="删除"
           negative-text="保留"
         >
@@ -111,6 +111,7 @@
                   : "Agent"
               }}
             </div>
+            <ReasoningBlock :text="item.rows[0]!.reasoning" />
             <div v-if="item.rows[0]!.message.content" class="message-text">
               {{ item.rows[0]!.message.content }}
             </div>
@@ -122,7 +123,8 @@
           class="message assistant"
         >
           <div class="message-label">Agent · 正在输出</div>
-          <div class="message-text">
+          <ReasoningBlock :text="live.reasoning" streaming />
+          <div v-if="live.text" class="message-text">
             {{ live.text }}<span class="cursor">▍</span>
           </div>
         </article>
@@ -168,7 +170,7 @@
               <n-button
                 text
                 size="tiny"
-                @click="safely(() => api(`/runs/${run.id}/cancel`, 'POST'))"
+                @click="safely(/* 作用：请求取消当前排队项。 */ () => api(`/runs/${run.id}/cancel`, 'POST'))"
                 >取消排队</n-button
               >
             </div>
@@ -184,16 +186,26 @@
         </div>
       </div>
       <form class="composer" @submit.prevent="submit()">
-        <n-input
+        <n-mention
           v-model:value="input"
           type="textarea"
-          placeholder="输入任务。运行中发送会排队，可在队列消息旁点击引导。"
+          placeholder="输入任务，使用 @ 选择工具。运行中发送会加入队列。"
+          :options="toolOptions"
+          :filter="filterTool"
           :autosize="{ minRows: 2, maxRows: 8 }"
-          :readonly="sending"
+          :disabled="sending"
+          @update:show="/* 作用：同步工具菜单是否展开，防止选择时误发送。 */ (show) => (mentionOpen = show)"
           @keydown="onKeydown"
         />
+        <div v-if="selectedTools.length" class="selected-tools" aria-live="polite">
+          <span>本次偏好工具</span>
+          <n-tag v-for="name in selectedTools" :key="name" size="small" type="success">
+            @{{ name }}
+          </n-tag>
+          <small>模型会优先考虑，信息不足时先询问；删除 @名称 可取消偏好。</small>
+        </div>
         <div class="composer-actions">
-          <span>Enter 发送 · Shift+Enter 换行</span
+          <span>@ 选择工具 · Enter 发送 · Shift+Enter 换行</span
           ><n-space align="center" :size="8">
             <n-button
               v-if="activeRun"
@@ -267,7 +279,7 @@
           class="todo-checkbox"
           :aria-label="`完成待办：${todo.title}`"
           :checked="todo.status === 'completed'"
-          @update:checked="(checked) => toggleTodo(todo, checked)"
+          @update:checked="/* 作用：将勾选状态提交为待办完成状态。 */ (checked) => toggleTodo(todo, checked)"
         />
         <div class="todo-body">
           <span
@@ -352,6 +364,9 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：会话聊天、任务队列、引导、压缩与共享待办交互。
 import { computed, nextTick, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
@@ -361,6 +376,7 @@ import {
   NDrawer,
   NDrawerContent,
   NInput,
+  NMention,
   NModal,
   NPagination,
   NPopconfirm,
@@ -385,6 +401,8 @@ import ContextMeter from "@/components/ContextMeter.vue";
 import ConnectionStatus from "@/components/ConnectionStatus.vue";
 import ToolSteps from "@/components/ToolSteps.vue";
 import TracePanel from "@/components/TracePanel.vue";
+import ReasoningBlock from "@/components/ReasoningBlock.vue";
+import { mentionedTools } from "@/lib/tool-mentions";
 import {
   configurationIssue,
   contextSnapshot,
@@ -399,6 +417,17 @@ const input = ref(""),
   traceOpen = ref(false),
   todosOpen = ref(true),
   summaryOpen = ref(false);
+// 采用组件自带的光标定位与键盘选择，候选项直接取自后端工具注册表。
+const mentionOpen = ref(false);
+const toolOptions = computed(/* 作用：生成包含工具名称及描述的提及候选项。 */ () => state.tools.map(/* 作用：生成包含工具名称及描述的提及候选项。 */ (tool) => ({
+  value: tool.name,
+  label: `${tool.name} · ${tool.description}`,
+})));
+const selectedTools = computed(/* 作用：根据当前草稿提取已选择的工具。 */ () => mentionedTools(input.value, state.tools));
+function filterTool(pattern: string, option: { label?: unknown; value?: unknown }) {
+  // 作用：按工具名和描述筛选提及菜单，兼容中文关键词。
+  return String(option.label || option.value).toLowerCase().includes(pattern.toLowerCase());
+}
 const todoTitle = ref(""),
   todoNotes = ref(""),
   todoSaving = ref(false),
@@ -412,21 +441,22 @@ const compactSubmitting = ref(false);
 const compactError = ref("");
 const steeringErrors = ref<Record<string, string>>({});
 watch(
-  () => [state.user, state.selected],
-  () => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => [state.user, state.selected],
+  /* 作用：切换用户或会话后重置对应的临时提示或恢复已隐藏记录。 */ () => {
     steeringErrors.value = {};
   },
 );
 const todoPageSize = 5;
-const visibleTodos = computed(() =>
+// 共享待办在当前页分页展示；数据变少时将页码收回有效范围。
+const visibleTodos = computed(/* 作用：截取共享待办的当前页数据。 */ () =>
   state.todos.slice(
     (todoPage.value - 1) * todoPageSize,
     todoPage.value * todoPageSize,
   ),
 );
 watch(
-  () => state.todos.length,
-  (count) => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => state.todos.length,
+  /* 作用：待办数量变化后将当前页码收回有效范围。 */ (count) => {
     todoPage.value = Math.min(
       todoPage.value,
       Math.max(1, Math.ceil(count / todoPageSize)),
@@ -434,15 +464,17 @@ watch(
   },
 );
 watch(
-  () => state.user,
-  () => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => state.user,
+  /* 作用：切换用户后重置待办分页位置。 */ () => {
     todoPage.value = 1;
   },
 );
 const dismissedProblems = ref<string[]>([]);
-const problemStorageKey = () =>
+const problemStorageKey = /* 作用：生成按用户和会话隔离的异常提示存储键。 */ () =>
   `harness-dismissed-runs:${state.user}:${state.selected}`;
 function dismissProblem(id: string) {
+  // 作用：在当前用户和会话范围内隐藏历史任务异常提示。
+  // 仅隐藏当前用户、当前会话的历史提示，不修改服务端任务状态。
   dismissedProblems.value = [...new Set([...dismissedProblems.value, id])];
   try {
     sessionStorage.setItem(
@@ -450,18 +482,18 @@ function dismissProblem(id: string) {
       JSON.stringify(dismissedProblems.value),
     );
   } catch {
-    /* Dismissal still works if storage is unavailable. */
+    /* 浏览器存储不可用时，本次页面内仍可隐藏提示。 */
   }
 }
 watch(
-  () => [state.user, state.selected],
-  () => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => [state.user, state.selected],
+  /* 作用：切换用户或会话后重置对应的临时提示或恢复已隐藏记录。 */ () => {
     try {
       const saved = JSON.parse(
         sessionStorage.getItem(problemStorageKey()) || "[]",
       );
       dismissedProblems.value = Array.isArray(saved)
-        ? saved.filter((id): id is string => typeof id === "string")
+        ? saved.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (id): id is string => typeof id === "string")
         : [];
     } catch {
       dismissedProblems.value = [];
@@ -475,33 +507,35 @@ const examples = [
   "查看我的待办。",
 ];
 const currentTitle = computed(
-  () =>
-    state.sessions.find((item) => item.id === state.selected)?.title ||
+  /* 作用：读取当前会话标题，无匹配时使用默认名称。 */ () =>
+    state.sessions.find(/* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (item) => item.id === state.selected)?.title ||
     "新对话",
 );
-const activeRun = computed(() =>
-  state.runs.find((run) => ["running", "cancelling"].includes(run.status)),
+const activeRun = computed(/* 作用：查找正在运行或等待取消收尾的任务。 */ () =>
+  // cancelling 仍占用执行通道，等后端完成收尾后才能当成空闲。
+  state.runs.find(/* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (run) => ["running", "cancelling"].includes(run.status)),
 );
-const queued = computed(() =>
-  state.runs.filter((run) => run.status === "queued"),
+const queued = computed(/* 作用：筛选尚未开始执行的排队任务。 */ () =>
+  state.runs.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (run) => run.status === "queued"),
 );
-const lastCompaction = computed(() =>
-  [...state.runs].reverse().find((run) => run.purpose === "context_compaction"),
+const lastCompaction = computed(/* 作用：定位最近一次手动压缩任务。 */ () =>
+  [...state.runs].reverse().find(/* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (run) => run.purpose === "context_compaction"),
 );
-const compacting = computed(() =>
+const compacting = computed(/* 作用：判断当前是否正在提交或执行压缩。 */ () =>
   compactSubmitting.value || state.runs.some(
-    (run) => run.purpose === "context_compaction" &&
+    /* 作用：检查是否存在符合当前条件的记录。 */ (run) => run.purpose === "context_compaction" &&
       ["queued", "running", "cancelling"].includes(run.status),
   ),
 );
-const compactDisabled = computed(() =>
+const compactDisabled = computed(/* 作用：计算阻止手动压缩的首个原因。 */ () =>
+  // 手动压缩必须在会话空闲时提交，避免和排队消息争用上下文。
   setupIssue.value ||
   (!state.connected ? "后端未连接" : "") ||
   (state.sessionLoading || !state.selected ? "请等待会话加载" : "") ||
   (activeRun.value || queued.value.length ? "请等待当前任务和排队消息完成" : "") ||
   (!state.messages.length ? "当前会话还没有可压缩的历史" : ""),
 );
-const compactMessage = computed(() => {
+const compactMessage = computed(/* 作用：生成最近压缩任务的进度、结果或失败说明。 */ () => {
   if (compactError.value) return compactError.value;
   if (compacting.value) return "正在压缩上下文，可用对话页的停止按钮取消。";
   const run = lastCompaction.value;
@@ -512,48 +546,50 @@ const compactMessage = computed(() => {
       : run.compaction_message || "没有可压缩的较早历史。";
   return `压缩未完成：${reasonLabel(run.reason) || statusLabel(run.status)}`;
 });
-const historicalProblems = computed(() =>
+const historicalProblems = computed(/* 作用：筛选尚未隐藏的历史异常任务。 */ () =>
   state.runs.filter(
-    (run) =>
+    /* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (run) =>
       ["cancelled", "failed", "limited", "interrupted"].includes(run.status) &&
       run.reason !== "converted_to_steering" &&
       !dismissedProblems.value.includes(run.id),
   ),
 );
-const setupIssue = computed(() =>
+const setupIssue = computed(/* 作用：检查模型及运行配置是否满足发送条件。 */ () =>
   configurationIssue(state.settingsStatus, state.settings, state.profiles),
 );
 const canSend = computed(
-  () =>
+  /* 作用：检查会话、配置和事件连接是否允许提交消息。 */ () =>
     !setupIssue.value &&
     state.connected &&
     !!state.selected &&
     !state.sessionLoading,
 );
-const selectedProfile = computed(() =>
+const selectedProfile = computed(/* 作用：查找全局设置选中的对话模型。 */ () =>
   state.profiles.find(
-    (profile) => profile.id === state.settings.default_profile_id,
+    /* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (profile) => profile.id === state.settings.default_profile_id,
   ),
 );
-const contextUsage = computed(() => contextSnapshot(state.events));
-const visibleMessages = computed(() => conversationItems(state.messages));
-const pendingSteering = computed(() => {
+const contextUsage = computed(/* 作用：从历史事件还原当前上下文用量。 */ () => contextSnapshot(state.events));
+const visibleMessages = computed(/* 作用：将原始历史整理为聊天展示条目。 */ () => conversationItems(state.messages));
+const pendingSteering = computed(/* 作用：按引导 ID 取最新状态并筛选当前任务未消费的引导。 */ () => {
+  // 每条引导可能有多次状态事件，按 ID 取最新状态后筛选尚未应用的内容。
   const latest = new Map<string, (typeof state.events)[number]>();
   state.events
-    .filter((event) => event.type === "steering.updated")
-    .forEach((event) => latest.set(event.data.id, event));
+    .filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (event) => event.type === "steering.updated")
+    .forEach(/* 作用：按标识保存最新引导事件，后续状态覆盖同一引导的旧状态。 */ (event) => latest.set(event.data.id, event));
   return [...latest.values()].filter(
-    (event) =>
+    /* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (event) =>
       event.data.status === "pending" && event.run_id === activeRun.value?.id,
   );
 });
-const activityText = computed(() => {
+const activityText = computed(/* 作用：从当前任务的关键事件生成进度提示。 */ () => {
+  // 从当前任务最近的关键事件生成进度提示，逐字输出不覆盖工具或重试状态。
   const event = [...state.events]
     .reverse()
     .find(
-      (item) =>
+      /* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (item) =>
         item.run_id === activeRun.value?.id &&
-        !["model.delta", "steering.updated"].includes(item.type),
+        !["model.delta", "model.reasoning.delta", "steering.updated"].includes(item.type),
     );
   if (activeRun.value?.status === "cancelling")
     return "正在停止并核对已执行结果…";
@@ -566,6 +602,7 @@ const activityText = computed(() => {
   return "Agent 正在处理…";
 });
 function statusLabel(status: string) {
+  // 作用：把聊天区需要提示的异常任务状态转换成中文。
   return (
     (
       {
@@ -578,6 +615,7 @@ function statusLabel(status: string) {
   );
 }
 function reasonLabel(reason?: string) {
+  // 作用：翻译已知停止原因，其他原因保留后端说明。
   return (
     (
       {
@@ -589,6 +627,8 @@ function reasonLabel(reason?: string) {
   );
 }
 async function promoteQueued(id: string) {
+  // 作用：将排队消息转为当前任务引导，失败提示仅写回原会话。
+  // 请求后端原子转换排队消息；失败时保留原队列项，并在该条消息旁展示原因。
   if (
     promoting.value ||
     activeRun.value?.status !== "running" ||
@@ -612,6 +652,8 @@ async function promoteQueued(id: string) {
   }
 }
 async function compactContext() {
+  // 作用：提交手动压缩任务，合并重复通知并记录当前会话的提交错误。
+  // HTTP 返回和 SSE 都可能先到，按任务 ID 去重；错误仅写回原会话。
   if (compacting.value || compactDisabled.value) return;
   const session = state.selected;
   compactSubmitting.value = true;
@@ -621,7 +663,7 @@ async function compactContext() {
       client_id: state.clientId,
       request_id: crypto.randomUUID(),
     });
-    if (state.selected === session && !state.runs.some((item) => item.id === run.id))
+    if (state.selected === session && !state.runs.some(/* 作用：检查是否存在符合当前条件的记录。 */ (item) => item.id === run.id))
       state.runs.push(run);
   } catch (error) {
     if (state.selected === session)
@@ -633,30 +675,40 @@ async function compactContext() {
   }
 }
 async function submit() {
+  // 作用：校验输入并提交任务，仅在请求成功后清空草稿。
+  // 请求被接受后才清空输入；发送中的新消息排队，不自动当作运行引导。
   const content = input.value.trim();
   if (!content || sending.value || !canSend.value) return;
   sending.value = true;
-  await safely(async () => {
+  await safely(/* 作用：校验输入并提交任务，仅在请求成功后清空草稿。 */ async () => {
     await send(content);
     input.value = "";
   });
   sending.value = false;
 }
 function onKeydown(event: KeyboardEvent) {
+  // 作用：处理 Enter 发送，同时避开输入法选词、换行和工具菜单选择。
+  // 输入法组合期间的 Enter 用于选词，Shift+Enter 用于换行，都不触发发送。
+  // 菜单处理过的 Enter 不能再次提交，否则选择工具就会意外发送消息。
+  if (event.defaultPrevented || mentionOpen.value) return;
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     void submit();
   }
 }
 function stop() {
+  // 作用：请求停止当前活跃任务，最终结果由后端事件驱动。
+  // 仅发起停止请求；按钮和界面等待后端 cancelling/终态事件更新。
   if (activeRun.value)
-    void safely(() => api(`/runs/${activeRun.value!.id}/cancel`, "POST"));
+    void safely(/* 作用：请求停止当前活跃任务，最终结果由后端事件驱动。 */ () => api(`/runs/${activeRun.value!.id}/cancel`, "POST"));
 }
 async function addTodo() {
+  // 作用：防止重复提交新增待办，保存成功后清空输入。
+  // 防止连续点击重复新增，只有服务端确认成功后才清空表单。
   if (!todoTitle.value.trim() || todoSaving.value) return;
   todoSaving.value = true;
   try {
-    await safely(async () => {
+    await safely(/* 作用：防止重复提交新增待办，保存成功后清空输入。 */ async () => {
       await changeTodo({
         action: "add",
         title: todoTitle.value.trim(),
@@ -670,7 +722,9 @@ async function addTodo() {
   }
 }
 function toggleTodo(todo: Todo, checked: boolean) {
-  void safely(async () => {
+  // 作用：携带当前版本更新待办完成状态，并重新读取服务端结果。
+  // 提交当前版本防止覆盖其他窗口的修改；无论成败都重新读取最新待办。
+  void safely(/* 作用：携带当前版本更新待办完成状态，并重新读取服务端结果。 */ async () => {
     try {
       await changeTodo({
         action: "update",
@@ -684,7 +738,9 @@ function toggleTodo(todo: Todo, checked: boolean) {
   });
 }
 function removeTodo(todo: Todo) {
-  void safely(async () => {
+  // 作用：携带当前版本删除待办，并刷新列表以处理并发修改。
+  // 删除同样校验版本，不在前端先移除条目，以后端实际结果为准。
+  void safely(/* 作用：携带当前版本删除待办，并刷新列表以处理并发修改。 */ async () => {
     try {
       await changeTodo({
         action: "delete",
@@ -697,14 +753,18 @@ function removeTodo(todo: Todo) {
   });
 }
 function editTodo(todo: Todo) {
+  // 作用：将待办复制到编辑表单，保留原版本用于并发校验。
+  // 表单只编辑副本字段，保留打开时的版本供保存时检查并发修改。
   editing.value = todo;
   editTitle.value = todo.title;
   editNotes.value = todo.notes;
   editOpen.value = true;
 }
 async function saveTodo() {
+  // 作用：保存待办表单，成功后关闭弹窗并重新获取列表。
+  // 成功才关闭编辑框；版本冲突后刷新列表，避免继续展示过期状态。
   if (!editing.value) return;
-  await safely(async () => {
+  await safely(/* 作用：保存待办表单，成功后关闭弹窗并重新获取列表。 */ async () => {
     try {
       await changeTodo({
         action: "update",
@@ -720,21 +780,22 @@ async function saveTodo() {
   });
 }
 watch(
-  () => state.selected,
-  () => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => state.selected,
+  /* 作用：切换会话后关闭摘要弹窗并清理压缩错误。 */ () => {
     summaryOpen.value = false;
     compactError.value = "";
   },
 );
 watch(
-  () => [
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => [
     state.messages.length,
     Object.values(state.live)
-      .map((item) => item.text)
+      .map(/* 作用：把每条输入记录转换成当前展示或断言需要的结构。 */ (item) => item.text + item.reasoning)
       .join(""),
   ],
-  async () => {
+  /* 作用：等待消息 DOM 更新后滚动聊天区域，覆盖正式消息和流式片段。 */ async () => {
     await nextTick();
+    // 等 Vue 完成消息 DOM 更新后滚动，覆盖落库消息和流式文本两种更新。
     if (scrollArea.value)
       scrollArea.value.scrollTop = scrollArea.value.scrollHeight;
   },
@@ -923,6 +984,16 @@ small {
   padding: 16px 20px;
   border-top: 1px solid #edf0ed;
 }
+.selected-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  color: #718077;
+  font-size: 12px;
+}
+.selected-tools small { width: 100%; }
 .composer-actions {
   display: flex;
   justify-content: space-between;

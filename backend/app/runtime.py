@@ -1,4 +1,10 @@
+# 作者：LHF。
+# 注释维护时间：2026-10-20。
+# 文件作用：会话调度、Agent 循环、预算控制、取消与恢复。
 """Own Agent Loop and session scheduler; all mutation boundaries are explicit."""
+
+# 核心执行链：submit 入队 → _lane 按会话调度 → _execute 循环调用模型与工具。
+# 消息、任务、事件均落库；内存中的 Task 和客户端队列只负责本次进程内的执行。
 
 import asyncio
 import json
@@ -14,6 +20,7 @@ from app.storage import Database, uid
 from app.token_budget import output_reserve
 from app.tools import ToolError, ToolRegistry
 
+# 终态任务不再被调度；cancelling 仍需等待工具收尾，不能提前视为已取消。
 TERMINAL = {"completed", "cancelled", "failed", "interrupted", "limited"}
 SYSTEM = (
     "你是一个可验证的中文助手。按用户目标决定直接回答或调用工具。"
@@ -30,14 +37,17 @@ class BudgetExceeded(Exception):
 
 class DomainError(Exception):
     def __init__(self, message, status=400):
+        # 作用：保存业务错误提示和供接口层返回的 HTTP 状态码。
         self.status = status
         super().__init__(message)
 
 
 @dataclass
 class Client:
+    # 一个浏览器连接对应一个客户端；有界队列防止慢消费者无限堆积事件。
     id: str
     user_id: str
+    # 作用：为每个客户端独立创建有界事件队列，不在实例之间共享队列。
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=2000))
     connected: bool = False
     closed: bool = False
@@ -45,19 +55,24 @@ class Client:
 
 class Runtime:
     def __init__(self, db: Database, model=None, sleep=asyncio.sleep):
+        # 作用：装配数据库、模型、工具与上下文模块，并建立客户端和会话调度状态。
         self.db = db
         self.model = model or OpenAIModel()
         self.registry = ToolRegistry()
         self.context = ContextManager(db)
         self.sleep = sleep
         self.clients: dict[str, Client] = {}
+        # 每个会话一条调度通道，因此同会话串行、不同会话可以并行。
         self.lanes: dict[str, asyncio.Task] = {}
+        # executions 保存可取消的执行任务，active 保存正在变化的运行状态。
         self.executions: dict[str, asyncio.Task] = {}
         self.active: dict[str, dict] = {}
+        # 提交、取消、引导和任务完成共用此锁，避免状态检查后被其他协程抢先改变。
         self.control = asyncio.Lock()
         self.shutting_down = False
 
     async def initialize(self):
+        # 服务重启后仅修复历史状态，不自动重放可能已经产生副作用的任务。
         await self.db.initialize()
         if not await self.db.get("runtime-settings"):
             await self.db.put("settings", {"id": "runtime-settings", **RuntimeSettings().model_dump()})
@@ -76,10 +91,12 @@ class Runtime:
                 await self.emit("run.updated", self.public_run(run), run)
 
     async def settings(self):
+        # 数据库记录的 id 不属于配置字段，先去掉再做严格校验。
         data = await self.db.get("runtime-settings")
         return RuntimeSettings.model_validate({key: value for key, value in data.items() if key != "id"})
 
     async def emit(self, kind, data, run=None, user_id=None, session_id=None):
+        # 先持久化再广播；owner=None 表示全局事件，否则仅发送给对应演示用户。
         owner = run["user_id"] if run else user_id
         event = await self.db.append_event(
             kind, data, owner, run["session_id"] if run else session_id, run["id"] if run else None
@@ -87,6 +104,7 @@ class Runtime:
         for client in tuple(self.clients.values()):
             if not client.closed and client.connected and (owner is None or client.user_id == owner):
                 if client.queue.full():
+                    # 队列满时断开连接，由前端重连后重新读取历史快照。
                     asyncio.create_task(self.disconnect(client.id))
                     continue
                 client.queue.put_nowait(event)
@@ -94,11 +112,14 @@ class Runtime:
 
     @staticmethod
     def public_run(run):
+        # 模型配置可能含密钥；流式临时文本也不作为任务公开字段返回。
         return {
-            key: value for key, value in run.items() if key not in {"partial", "profile", "summary_profile"}
+            key: value for key, value in run.items()
+            if key not in {"partial", "partial_reasoning", "profile", "summary_profile"}
         }
 
     async def session(self, session_id, user_id):
+        # 统一检查记录类型、归属和软删除状态，避免仅凭 ID 读取其他用户会话。
         session = await self.db.get(session_id)
         if (
             not session
@@ -110,6 +131,7 @@ class Runtime:
         return session
 
     async def delete_session(self, session_id, user_id):
+        # 仅标记删除，保留历史记录；存在未结束任务时拒绝删除。
         async with self.control:
             session = await self.session(session_id, user_id)
             runs = await self.db.list("run", parent=session_id)
@@ -121,6 +143,7 @@ class Runtime:
             return {"deleted": True, "id": session_id}
 
     async def configured_models(self, settings):
+        # 摘要模型未单独选择时复用对话模型；两者都必须通过连接和容量检查。
         profiles = []
         for label, key in (
             ("对话", settings.default_profile_id),
@@ -139,6 +162,7 @@ class Runtime:
         return profiles
 
     async def create_session(self, user_id, title):
+        # 会话只绑定当前用户；共享待办另按用户存储，不挂在会话下面。
         session = {
             "id": uid(),
             "kind": "session",
@@ -151,15 +175,18 @@ class Runtime:
         return session
 
     async def submit(self, session_id, user_id, request, purpose="chat"):
+        # HTTP 仅创建排队任务；执行与结果通知交由调度通道和 SSE 完成。
         async with self.control:
             await self.session(session_id, user_id)
             client = self.clients.get(request.client_id)
             if not client or not client.connected or client.closed or client.user_id != user_id:
                 raise DomainError("事件连接尚未就绪，请等待连接成功后发送", 409)
             request_key = f"request:{user_id}:{request.client_id}:{request.request_id}"
+            # 相同客户端重复提交同一请求时返回原任务，防止网络重试导致重复执行。
             previous = await self.db.get(request_key)
             if previous:
                 return await self.db.get(previous["run_id"])
+            tool_names = self.validate_tools(getattr(request, "tool_names", []))
             if purpose == "context_compaction" and any(
                 run["status"] not in TERMINAL for run in await self.db.list("run", parent=session_id)
             ):
@@ -177,8 +204,10 @@ class Runtime:
                 "model_calls": 0,
                 "tool_calls": 0,
                 "reason": None,
+                "tool_names": tool_names,
             }
             async with self.db.transaction() as connection:
+                # 任务和请求索引一起提交，不能出现已入队却无法识别重复请求的半成品。
                 await self.db.put("run", run, owner=user_id, parent=session_id, connection=connection)
                 await self.db.put("request", {"id": request_key, "run_id": run["id"]}, connection=connection)
             await self.emit("run.updated", self.public_run(run), run)
@@ -186,7 +215,15 @@ class Runtime:
                 self.lanes[session_id] = asyncio.create_task(self._lane(session_id))
             return run
 
+    def validate_tools(self, names):
+        # 名称来自客户端，必须对照当前注册表校验，不接受任意函数或伪造工具。
+        unknown = set(names) - self.registry.tools.keys()
+        if unknown:
+            raise DomainError("未知工具：" + "、".join(sorted(unknown)))
+        return list(dict.fromkeys(names))
+
     async def steer(self, run_id, user_id, request):
+        # 引导先以 pending 保存，在循环边界再作为用户消息加入上下文。
         async with self.control:
             run = await self.db.get(run_id)
             if not run or run["user_id"] != user_id:
@@ -198,12 +235,14 @@ class Runtime:
             key = f"steer:{run_id}:{request.request_id}"
             item = await self.db.get(key)
             if item is None:
-                item = {"id": key, "content": request.content, "status": "pending", "run_id": run_id}
+                item = {"id": key, "content": request.content, "status": "pending", "run_id": run_id,
+                        "tool_names": self.validate_tools(request.tool_names)}
                 await self.db.put("steering", item, owner=user_id, parent=run_id)
                 await self.emit("steering.updated", item, run)
             return item
 
     async def cancel(self, run_id, user_id, reason="user_stop"):
+        # 这里只发起取消；运行中的任务可能还需确认写入结果才会进入终态。
         async with self.control:
             run = await self.db.get(run_id)
             if not run or run["user_id"] != user_id:
@@ -212,6 +251,7 @@ class Runtime:
             return self.public_run(await self.db.get(run_id))
 
     async def steer_queued(self, queued_id, user_id):
+        # 将排队消息原子地转成当前任务的引导，原排队任务随之取消，避免重复执行。
         async with self.control:
             queued = await self.db.get(queued_id)
             if not queued or queued.get("user_id") != user_id or "session_id" not in queued:
@@ -240,6 +280,7 @@ class Runtime:
                 "status": "pending",
                 "run_id": target["id"],
                 "source_run_id": queued_id,
+                "tool_names": queued.get("tool_names", []),
             }
             queued.update(
                 status="cancelled",
@@ -256,6 +297,7 @@ class Runtime:
             return item
 
     async def _cancel_locked(self, run, reason):
+        # 调用方必须持有 control 锁；排队任务可直接取消，执行任务先标记 cancelling。
         if run["status"] in TERMINAL:
             return
         current = self.active.get(run["id"], run)
@@ -267,6 +309,7 @@ class Runtime:
             task.cancel()
 
     async def disconnect(self, client_id):
+        # 断开连接只取消由该客户端提交的任务，不影响同用户其他窗口的任务。
         async with self.control:
             client = self.clients.get(client_id)
             if not client or client.closed:
@@ -278,13 +321,15 @@ class Runtime:
                 for r in await self.db.list("run", owner=client.user_id)
                 if r["client_id"] == client_id and r["status"] not in TERMINAL
             ]
-            # Cancel the queue first so the lane cannot start its next task.
+            # 先取消排队项，避免运行任务退出后调度通道立即启动下一项。
+            # 作用：排序键将排队任务放在前面，防止运行任务结束后启动尚未取消的队列项。
             for run in sorted(runs, key=lambda r: r["status"] != "queued"):
                 await self._cancel_locked(run, "client_disconnect")
             if not client.queue.full():
                 client.queue.put_nowait(None)
 
     async def _lane(self, session_id):
+        # 按入库顺序逐个取任务；等待当前执行及其收尾完成后才取下一个。
         while not self.shutting_down:
             async with self.control:
                 queued = [r for r in await self.db.list("run", parent=session_id) if r["status"] == "queued"]
@@ -304,7 +349,7 @@ class Runtime:
             try:
                 await task
             except asyncio.CancelledError:
-                # A task can be cancelled before its coroutine starts.
+                # Task 可能尚未进入 _execute 就被取消，因此此处也要补写终态。
                 if run["status"] not in TERMINAL:
                     run.update(status="cancelled", ended_at=time.time())
                     await self.db.put("run", self.public_run(run))
@@ -313,7 +358,8 @@ class Runtime:
                 self.executions.pop(run["id"], None)
                 self.active.pop(run["id"], None)
 
-    async def append(self, run, message, input_kind=None):
+    async def append(self, run, message, input_kind=None, reasoning="", tool_names=None):
+        # 保存完整协议消息后发出事件；input_kind 区分原请求、引导和中断说明。
         row = {
             "id": uid(),
             "run_id": run["id"],
@@ -321,24 +367,31 @@ class Runtime:
             "message": message,
             "input_kind": input_kind,
             "timestamp": time.time(),
+            # 思考作为展示元数据持久化，不混入回答正文或冒充新的用户指令。
+            "reasoning": reasoning,
+            # 工具偏好作为消息元数据保存，原始用户正文保持不变。
+            "tool_names": list(tool_names or []),
         }
         await self.db.put("message", row, owner=run["user_id"], parent=run["session_id"])
         await self.emit("message.created", row, run)
         return row
 
     async def _apply_steering(self, run):
+        # 只消费 pending 引导，标记 applied 后下一轮不会重复加入历史。
         async with self.control:
             pending = [
                 s for s in await self.db.list("steering", parent=run["id"]) if s["status"] == "pending"
             ]
             for item in pending:
-                await self.append(run, {"role": "user", "content": item["content"]}, "steering")
+                await self.append(run, {"role": "user", "content": item["content"]}, "steering",
+                                  tool_names=item.get("tool_names", []))
                 item["status"] = "applied"
                 await self.db.put("steering", item)
                 await self.emit("steering.updated", item, run)
             return bool(pending)
 
     async def _invoke(self, run, settings, profile, messages, tools, max_tokens, streaming):
+        # 对话、摘要和重试统一走此入口，共享模型调用次数及任务总时长预算。
         for attempt in range(settings.retries + 1):
             if run.get("reason"):
                 raise asyncio.CancelledError
@@ -347,6 +400,7 @@ class Runtime:
             run["model_calls"] += 1
             call_id = uid()
             run["partial"] = ""
+            run["partial_reasoning"] = ""
             await self.db.put("run", self.public_run(run))
             await self.emit(
                 "model.started",
@@ -360,10 +414,18 @@ class Runtime:
             )
 
             async def on_text(text):
+                # 临时文本同时保存在内存和事件流中，中断时可据此保留已输出部分。
                 if run.get("reason"):
                     raise asyncio.CancelledError
                 run["partial"] += text
                 await self.emit("model.delta", {"call_id": call_id, "text": text}, run)
+
+            async def on_reasoning(text):
+                # 作用：累积已返回的思考片段并广播独立事件，支持中断后保留。
+                if run.get("reason"):
+                    raise asyncio.CancelledError
+                run["partial_reasoning"] += text
+                await self.emit("model.reasoning.delta", {"call_id": call_id, "text": text}, run)
 
             try:
                 async with asyncio.timeout(settings.model_timeout):
@@ -374,6 +436,7 @@ class Runtime:
                         max_tokens,
                         settings.model_timeout,
                         on_text if streaming else None,
+                        on_reasoning=on_reasoning if streaming else None,
                     )
                 await self.emit(
                     "model.finished",
@@ -382,9 +445,10 @@ class Runtime:
                 )
                 if not streaming:
                     run["partial"] = ""
+                    run["partial_reasoning"] = ""
                 return reply
             except (ModelFailure, TimeoutError) as error:
-                partial = bool(run.get("partial"))
+                partial = bool(run.get("partial") or run.get("partial_reasoning"))
                 failure = error if isinstance(error, ModelFailure) else ModelFailure("模型请求超时", True)
                 await self.emit(
                     "model.failed",
@@ -397,6 +461,7 @@ class Runtime:
                     run,
                 )
                 if partial or not failure.retryable or attempt >= settings.retries:
+                    # 已向用户输出部分内容后不重试，避免重复生成或混合两次回答。
                     raise failure
                 if run["model_calls"] >= settings.max_model_calls:
                     raise BudgetExceeded("模型调用预算不足，未继续重试") from None
@@ -417,12 +482,15 @@ class Runtime:
                 await self.sleep(delay)
 
     async def _compact_manually(self, run, settings, profile, summary_profile):
+        # 手动压缩沿用任务预算和取消机制，但不追加新的用户聊天消息。
         outcome = "skipped"
 
         async def summarize(p, messages, max_tokens):
+            # 作用：通过统一模型入口生成历史摘要，计入当前任务预算。
             return await self._invoke(run, settings, p, messages, None, max_tokens, False)
 
         async def emit(kind, data):
+            # 作用：转发手动压缩事件，并记录压缩结果或将失败转成异常。
             nonlocal outcome
             await self.emit(kind, data, run)
             if kind == "context.compaction_failed":
@@ -448,9 +516,11 @@ class Runtime:
         run.update(status="completed", compaction_result=outcome)
 
     async def _execute(self, run):
+        # 主循环：应用引导 → 构建上下文 → 调用模型 → 执行工具 → 再次调用模型。
         try:
             settings = await self.settings()
             run["settings"] = settings.model_dump()
+            # 启动时固定配置快照，运行期间修改全局设置不会改变本任务的执行参数。
             profile, summary_profile = await self.configured_models(settings)
             run["profile"] = dict(profile)
             run["summary_profile"] = dict(summary_profile)
@@ -461,7 +531,8 @@ class Runtime:
                 "capacity_source": profile["capacity_source"],
             }
             if run.get("purpose") != "context_compaction":
-                await self.append(run, {"role": "user", "content": run["content"]}, "request")
+                await self.append(run, {"role": "user", "content": run["content"]}, "request",
+                                  tool_names=run.get("tool_names", []))
             await self.emit("run.updated", self.public_run(run), run)
             if run.get("purpose") == "context_compaction":
                 await self._compact_manually(run, settings, profile, summary_profile)
@@ -471,9 +542,11 @@ class Runtime:
                     await self._apply_steering(run)
 
                     async def summarize(p, messages, max_tokens):
+                        # 作用：通过统一模型入口生成历史摘要，计入当前任务预算。
                         return await self._invoke(run, settings, p, messages, None, max_tokens, False)
 
                     async def context_event(kind, data):
+                        # 作用：为上下文事件补充当前任务归属后持久化并广播。
                         await self.emit(kind, data, run)
 
                     messages = await self.context.build(
@@ -487,8 +560,7 @@ class Runtime:
                         summarize,
                         context_event,
                     )
-                    # Steering can arrive during compaction: add it before the actual call,
-                    # and rebuild to include its token cost.
+                    # 压缩期间也可能收到引导；若有新增内容，重新构建并计算用量后再调用模型。
                     if await self._apply_steering(run):
                         continue
                     reply = await self._invoke(
@@ -509,9 +581,13 @@ class Runtime:
                         for call in row["message"].get("tool_calls", [])
                     }
                     ids = [call.id for call in reply.calls]
+                    # 调用 ID 用于配对结果和幂等写入，重复 ID 会让执行归属产生歧义。
                     if len(ids) != len(set(ids)) or previous_calls.intersection(ids):
                         raise ModelFailure("模型返回重复工具调用ID，未执行该批工具")
                     message = {"role": "assistant", "content": reply.text or None}
+                    if reply.reasoning_content is not None:
+                        # 工具追问必须保留供应商原生思考，不使用混合标签后的展示文本替代。
+                        message["reasoning_content"] = reply.reasoning_content
                     if reply.calls:
                         message["tool_calls"] = [
                             {
@@ -521,8 +597,9 @@ class Runtime:
                             }
                             for c in reply.calls
                         ]
-                    await self.append(run, message)
+                    await self.append(run, message, reasoning=reply.reasoning)
                     run["partial"] = ""
+                    run["partial_reasoning"] = ""
                     if reply.calls:
                         await self._batch(run, settings, reply.calls, reply.finish_reason)
                         continue
@@ -530,7 +607,7 @@ class Runtime:
                         raise ModelFailure("模型输出未正常结束，已保留现有内容")
                     if not reply.text.strip():
                         raise ModelFailure("模型没有返回可用回答或工具调用")
-                    # Same lock as steer(): no accepted steering is lost at completion.
+                    # 与 steer 共用锁：完成前再次检查引导，确保已接受的引导不会被遗漏。
                     async with self.control:
                         pending = [
                             s
@@ -559,6 +636,7 @@ class Runtime:
             await self._save_interruption(run, run["reason"])
         finally:
             await self.repair_calls(run)
+            # 无论成功、取消或异常，都明确标记未消费引导，并持久化最终任务状态。
             for item in await self.db.list("steering", parent=run["id"]):
                 if item["status"] == "pending":
                     item["status"] = "unprocessed"
@@ -569,8 +647,10 @@ class Runtime:
             await self.emit("run.updated", self.public_run(run), run)
 
     async def _save_interruption(self, run, reason):
+        # 先补齐工具结果，再保存部分回答及中断原因，保持历史协议完整。
         await self.repair_calls(run)
         text = run.pop("partial", "")
+        reasoning = run.pop("partial_reasoning", "")
         await self.append(
             run,
             {
@@ -578,9 +658,11 @@ class Runtime:
                 "content": (text + "\n\n" if text else "") + f"[执行状态：{reason}。已确认的工具结果保留。]",
             },
             "interruption",
+            reasoning=reasoning,
         )
 
     async def _batch(self, run, settings, calls, finish_reason):
+        # 整批检查预算和截断状态；即使拒绝执行，也为每个调用写入对应失败结果。
         outcomes = {}
         budget_error = len(calls) > settings.max_tool_calls - run["tool_calls"]
         truncated = finish_reason == "length"
@@ -599,6 +681,7 @@ class Runtime:
         semaphore = asyncio.Semaphore(settings.tool_concurrency)
 
         async def one(call):
+            # 作用：在并发限制内执行单个工具，处理超时、取消并发出执行结果。
             async with semaphore:
                 if run.get("reason"):
                     return
@@ -613,7 +696,7 @@ class Runtime:
                     result = await asyncio.wait_for(asyncio.shield(task), settings.tool_timeout)
                     outcomes[call.id] = {"ok": True, "result": result}
                 except (asyncio.CancelledError, TimeoutError) as error:
-                    # A SQLite commit may already be in flight. Settle it before the lane advances.
+                    # SQLite 写入可能已开始提交；待办工具须等待结果确定后才能推进会话队列。
                     if call.name == "todo":
                         try:
                             result = await asyncio.shield(task)
@@ -664,6 +747,7 @@ class Runtime:
         try:
             if not budget_error and not truncated:
                 if self.registry.is_parallel(calls):
+                    # 只有全批工具均声明可并行才并发；包含待办时整批按模型给出的顺序执行。
                     children = [asyncio.create_task(one(call)) for call in calls]
                     try:
                         await asyncio.gather(*children)
@@ -677,6 +761,7 @@ class Runtime:
                         await one(call)
         finally:
             for call in calls:
+                # 按原调用顺序回填结果，取消前未启动的工具也必须有明确的协议响应。
                 result = outcomes.get(
                     call.id,
                     {"ok": False, "error": {"code": "cancelled", "message": "未执行：当前任务已停止"}},
@@ -695,6 +780,7 @@ class Runtime:
             raise BudgetExceeded("工具预算不足，整批未执行")
 
     async def repair_calls(self, run):
+        # 中断恢复只查询已提交操作，不重跑工具；找不到成功凭据就明确记录未确认成功。
         rows = await self.db.list("message", parent=run["session_id"])
         for index, row in enumerate(rows):
             completed = set()
@@ -727,6 +813,7 @@ class Runtime:
                     completed.add(call["id"])
 
     async def close(self):
+        # 停止接收新调度，取消客户端任务，等待各会话收尾后再关闭数据库。
         self.shutting_down = True
         for client_id in list(self.clients):
             await self.disconnect(client_id)

@@ -73,23 +73,17 @@
                 },
               ]"
           /></n-form-item>
-          <n-form-item label="推理强度（可选）"
-            ><n-select
-              v-model:value="modelForm.reasoning_effort"
-              clearable
-              placeholder="不发送该参数"
-              :options="
-                [
-                  'none',
-                  'minimal',
-                  'low',
-                  'medium',
-                  'high',
-                  'xhigh',
-                  'max',
-                ].map((value) => ({ label: value, value }))
-              "
-          /></n-form-item>
+          <n-form-item label="思考模式">
+            <div>
+              <n-switch v-model:value="modelForm.thinking_enabled" aria-label="开启思考模式">
+                <template #checked>已开启</template>
+                <template #unchecked>已关闭</template>
+              </n-switch>
+              <p class="field-help">
+                请自行查阅所用模型的 API 开发文档，确认该模型是否支持思考模式及其调用方式。
+              </p>
+            </div>
+          </n-form-item>
           <p class="field-help">
             保存时自动测试连接并读取容量；读取不到使用默认
             {{
@@ -154,7 +148,7 @@
                 :min="field.min"
                 :step="field.step || 1"
                 @update:value="
-                  (value) => (form[field.key] = value ?? field.min)
+                  /* 作用：更新对应预算字段，清空时恢复该字段的最小值。 */ (value) => (form[field.key] = value ?? field.min)
                 "
               /><small>{{ field.help }}</small>
             </div>
@@ -177,6 +171,9 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：编辑模型连接及全局运行预算。
 import { computed, reactive, ref, watch } from "vue";
 import { formatTokenCount } from "@/lib/token-format";
 import {
@@ -188,6 +185,7 @@ import {
   NInput,
   NInputNumber,
   NSelect,
+  NSwitch,
   NSpace,
   NTag,
 } from "naive-ui";
@@ -206,25 +204,28 @@ const modelForm = reactive({
   api_key: "",
   model: "",
   output_token_parameter: "max_tokens",
-  reasoning_effort: null as string | null,
+  thinking_enabled: false,
 });
 const form = reactive<Record<string, any>>({});
+// 页面表单使用本地副本，输入时不直接更改应用已加载的全局运行设置。
 watch(
-  () => state.settings,
-  (settings) => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => state.settings,
+  /* 作用：将加载的全局设置复制到本地表单，避免直接修改共享状态。 */ (settings) => {
     Object.assign(form, settings);
   },
   { immediate: true },
 );
-const modelOptions = computed(() =>
+const modelOptions = computed(/* 作用：只列出连接测试通过的模型配置。 */ () =>
+  // 只有连接测试通过的模型可选；后端保存设置时还会再次校验。
   state.profiles
-    .filter((profile) => profile.test_status === "connected")
-    .map((profile) => ({
+    .filter(/* 作用：仅保留已通过连接测试的模型。 */ (profile) => profile.test_status === "connected")
+    .map(/* 作用：只列出连接测试通过的模型配置。 */ (profile) => ({
       label: `${profile.name} · ${profile.model}`,
       value: profile.id,
     })),
 );
 const fields = [
+  // 用统一配置渲染预算字段；字段键与后端 RuntimeSettings 保持对应。
   {
     key: "max_model_calls",
     label: "模型调用上限",
@@ -289,6 +290,8 @@ const fields = [
   },
 ];
 function resetProfile() {
+  // 作用：退出已有连接编辑，恢复新增模型表单的默认值。
+  // 退出编辑已有连接，恢复新增连接表单的默认值。
   editingId.value = "";
   Object.assign(modelForm, {
     name: "",
@@ -296,11 +299,13 @@ function resetProfile() {
     api_key: "",
     model: "",
     output_token_parameter: "max_tokens",
-    reasoning_effort: null,
+    thinking_enabled: false,
   });
   testMessage.value = "";
 }
 function editProfile(profile: Profile) {
+  // 作用：加载已有模型连接到编辑表单，密钥保持空白以沿用已存值。
+  // 密钥不会从服务端回显；留空提交代表保留原密钥。
   editingId.value = profile.id;
   Object.assign(modelForm, {
     name: profile.name,
@@ -308,19 +313,23 @@ function editProfile(profile: Profile) {
     model: profile.model,
     api_key: "",
     output_token_parameter: profile.output_token_parameter || "max_tokens",
-    reasoning_effort: profile.reasoning_effort || null,
+    thinking_enabled: profile.thinking_enabled ?? false,
   });
   testMessage.value = "";
 }
 function report(profile: Profile) {
+  // 作用：显示模型连接测试结果，并区分容量来源。
+  // 只展示服务端实际探测到的结果，并明确容量来自供应商还是默认值。
   testSuccess.value = profile.test_status === "connected";
   testMessage.value = testSuccess.value
     ? `连接成功。Context ${formatTokenCount(profile.context_capacity)} tokens，${profile.capacity_source.startsWith("default") ? "使用默认容量" : "已从供应商读取容量"}。`
     : "连接失败，配置已保留。请检查地址、模型、密钥及供应商支持情况。";
 }
 async function saveProfile() {
+  // 作用：新增或更新连接，等待后端测试并刷新配置列表。
+  // 保存接口会真实测试模型连接，完成后刷新全局连接列表及配置。
   testing.value = true;
-  await safely(async () => {
+  await safely(/* 作用：新增或更新连接，等待后端测试并刷新配置列表。 */ async () => {
     const profile = await api<Profile>(
       editingId.value ? `/models/${editingId.value}` : "/models",
       editingId.value ? "PUT" : "POST",
@@ -334,24 +343,30 @@ async function saveProfile() {
   testing.value = false;
 }
 async function testProfile() {
+  // 作用：重新测试已保存的模型连接并更新界面状态。
+  // 重测已保存的连接，当前表单尚未保存的改动不会参与本次测试。
   testing.value = true;
-  await safely(async () => {
+  await safely(/* 作用：重新测试已保存的模型连接并更新界面状态。 */ async () => {
     report(await api(`/models/${editingId.value}/test`, "POST"));
     await loadSettings();
   });
   testing.value = false;
 }
 async function deleteProfile() {
-  await safely(async () => {
+  // 作用：删除当前模型连接，成功后重置表单并刷新列表。
+  // 正在被全局设置引用的连接由后端拒绝删除，错误交给统一提示处理。
+  await safely(/* 作用：删除当前模型连接，成功后重置表单并刷新列表。 */ async () => {
     await api(`/models/${editingId.value}`, "DELETE");
     resetProfile();
     await loadSettings();
   });
 }
 async function saveSettings() {
+  // 作用：保存全局运行设置，刷新配置并提示后续任务生效。
+  // 全局配置保存成功后刷新状态，新设置用于后续开始执行的任务。
   saving.value = true;
   settingsSaved.value = false;
-  await safely(async () => {
+  await safely(/* 作用：保存全局运行设置，刷新配置并提示后续任务生效。 */ async () => {
     await api("/settings", "PUT", form);
     await loadSettings();
     settingsSaved.value = true;

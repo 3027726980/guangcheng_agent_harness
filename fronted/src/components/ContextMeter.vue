@@ -64,6 +64,9 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：展示上下文容量、用量及摘要和压缩入口。
 import { computed, ref } from "vue";
 import { NButton, NPopover } from "naive-ui";
 import { formatTokenCount } from "@/lib/token-format";
@@ -78,19 +81,23 @@ const props = defineProps<{
 const emit = defineEmits<{ summary: []; compact: [] }>();
 const detailsOpen = ref(false);
 function showSummary() {
+  // 作用：关闭容量浮层，再通知父页面展示历史摘要。
+  // 关闭容量浮层后再通知父页面打开摘要，避免两个浮层重叠。
   detailsOpen.value = false;
   emit("summary");
 }
-const capacity = computed(() =>
+const capacity = computed(/* 作用：优先使用执行快照中的上下文容量。 */ () =>
+  // 已有执行用量事件时使用任务快照容量，否则回退到当前模型配置。
   Number(props.usage?.capacity ?? props.capacity),
 );
-const source = computed(() => props.usage?.source ?? props.source);
-const known = computed(() => Number.isFinite(props.usage?.estimated_tokens));
-const used = computed(() => Number(props.usage?.estimated_tokens || 0));
-const percent = computed(() =>
+const source = computed(/* 作用：显示容量估算的数据来源。 */ () => props.usage?.source ?? props.source);
+const known = computed(/* 作用：区分未知用量和有效估算。 */ () => Number.isFinite(props.usage?.estimated_tokens));
+// 尚未估算和确实使用 0 tokens 分开处理，避免把未知用量显示成已确认值。
+const used = computed(/* 作用：读取最后一次有效的上下文用量。 */ () => Number(props.usage?.estimated_tokens || 0));
+const percent = computed(/* 作用：计算上下文用量占容量的百分比。 */ () =>
   capacity.value > 0 ? Math.max(0, (used.value / capacity.value) * 100) : 0,
 );
-const label = computed(() =>
+const label = computed(/* 作用：生成上下文容量入口的无障碍说明。 */ () =>
   known.value
     ? `上下文已使用约 ${Math.round(percent.value)}%，点击查看容量和摘要`
     : "上下文用量尚未估算，点击查看容量",

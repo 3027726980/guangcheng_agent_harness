@@ -112,8 +112,8 @@
               }}
             </div>
             <ReasoningBlock :text="item.rows[0]!.reasoning" />
-            <div v-if="item.rows[0]!.message.content" class="message-text">
-              {{ item.rows[0]!.message.content }}
+            <div v-if="item.rows[0]!.original_content ?? item.rows[0]!.message.content" class="message-text">
+              {{ item.rows[0]!.original_content ?? item.rows[0]!.message.content }}
             </div>
           </article>
         </template>
@@ -614,7 +614,8 @@ function statusLabel(status: string) {
     )[status] || status
   );
 }
-function reasonLabel(reason?: string) {
+function reasonLabel(reason?: string | null) {
+  // 作者：LHF；时间：2026-10-21；作用：接收 Run 尚无取消或失败原因时的 null。
   // 作用：翻译已知停止原因，其他原因保留后端说明。
   return (
     (

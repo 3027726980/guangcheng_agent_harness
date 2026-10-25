@@ -1,5 +1,5 @@
 # 作者：LHF。
-# 注释维护时间：2026-10-20。
+# 注释维护时间：2026-10-21。
 # 文件作用：FastAPI 接口、应用生命周期与 SSE 事件订阅。
 """FastAPI shell: demo identity, CRUD, task submission and SSE, not an agent framework."""
 
@@ -7,11 +7,12 @@ import asyncio
 import json
 import os
 import time
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
@@ -25,11 +26,11 @@ from app.schemas import (
     RuntimeSettings,
     SessionCreate,
     SteeringRequest,
-    TodoArgs,
     ToolCall,
 )
 from app.storage import Database, uid
-from app.tools import ToolError
+from app.tool.base import ToolError
+from app.tool.todo import TodoArgs
 
 
 def public_profile(profile):
@@ -52,11 +53,52 @@ def create_app(database_path=None, model=None):
     async def lifespan(app):
         # 初始化与退出跟随 ASGI 生命周期，模块导入本身不启动调度任务。
         await runtime.initialize()
-        yield
-        await runtime.close()
+        try:
+            yield
+        finally:
+            await runtime.close()
 
     app = FastAPI(title="Agent Harness", version="0.1.0", lifespan=lifespan)
     app.state.runtime = runtime
+
+    @app.middleware("http")
+    async def diagnostic_http(request: Request, call_next):
+        # 作者：LHF；时间：2026-10-22；作用：记录 HTTP 元数据及安全堆栈，不采集正文和请求头。
+        started = time.monotonic()
+        request_id = uid()
+        status = 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            response.headers["X-Request-ID"] = request_id
+            return response
+        except Exception as error:
+            await runtime.diagnostics.write(
+                "app",
+                {
+                    "type": "http.error",
+                    "request_id": request_id,
+                    "error": type(error).__name__,
+                    "frames": [
+                        {"file": frame.filename, "line": frame.lineno, "function": frame.name}
+                        for frame in traceback.extract_tb(error.__traceback__)
+                    ],
+                },
+            )
+            raise
+        finally:
+            await runtime.diagnostics.write(
+                "http",
+                {
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": status,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000),
+                },
+            )
+            await runtime.report_logging_status()
 
     @app.exception_handler(DomainError)
     async def domain_error(request, error):
@@ -90,7 +132,12 @@ def create_app(database_path=None, model=None):
     @app.get("/api/health")
     async def health():
         # 接口 GET /api/health：返回进程健康状态和当前运行方式，不调用模型。
-        return {"status": "ok", "runtime": "self_implemented", "identity": "demo_only"}
+        return {
+            "status": "ok",
+            "runtime": "self_implemented",
+            "identity": "demo_only",
+            "logging_error": runtime.diagnostics.error,
+        }
 
     @app.get("/api/users")
     async def users():
@@ -99,9 +146,11 @@ def create_app(database_path=None, model=None):
 
     @app.get("/api/tools")
     async def available_tools(owner=Depends(user)):
-        # 接口 GET /api/tools：前端 @ 菜单直接读取注册表，新增工具时不需要另维护一份可调用名称。
-        return [{"name": tool.name, "description": tool.description}
-                for tool in runtime.registry.tools.values()]
+        # 作者：LHF；时间：2026-10-21；作用：为前端 @ 菜单返回用户可选工具，排除内部工具。
+        return [
+            {"name": tool.name, "description": tool.description}
+            for tool in runtime.registry.user_tools().values()
+        ]
 
     @app.post("/api/clients")
     async def register_client(owner=Depends(user)):
@@ -121,7 +170,8 @@ def create_app(database_path=None, model=None):
         async def stream():
             # ready 通知前端可以提交任务；心跳注释维持连接，不作为业务事件处理。
             try:
-                yield "event: ready\ndata: {}\n\n"
+                ready = json.dumps({"logging_error": runtime.diagnostics.error}, ensure_ascii=False)
+                yield f"event: ready\ndata: {ready}\n\n"
                 while not client.closed:
                     if await request.is_disconnected():
                         break
@@ -157,9 +207,9 @@ def create_app(database_path=None, model=None):
         # 接口 GET /api/sessions：列表附带各会话的活跃任务，侧栏无需逐个加载会话详情即可展示执行状态。
         items = [item for item in await runtime.db.list("session", owner=owner) if not item.get("deleted")]
         active = {item["id"]: [] for item in items}
-        for run in await runtime.db.list("run", owner=owner):
-            if run["session_id"] in active and run["status"] in {"queued", "running", "cancelling"}:
-                active[run["session_id"]].append({"id": run["id"], "status": run["status"]})
+        for run in await runtime.list_runs(owner=owner):
+            if run.session_id in active and run.status in {"queued", "running", "cancelling"}:
+                active[run.session_id].append({"id": run.id, "status": run.status})
         return [{**item, "active_runs": active[item["id"]]} for item in items]
 
     @app.post("/api/sessions")
@@ -179,10 +229,31 @@ def create_app(database_path=None, model=None):
         return {
             "session": session,
             "messages": await runtime.db.list("message", parent=session_id),
-            "runs": await runtime.db.list("run", parent=session_id),
+            "runs": [runtime.public_run(run) for run in await runtime.list_runs(parent=session_id)],
             "summary": await runtime.db.get("summary:" + session_id),
             "events": await runtime.db.history_events(owner, session_id),
         }
+
+    @app.get("/api/sessions/{session_id}/model-calls")
+    async def model_calls(
+        session_id: str,
+        run_id: str | None = None,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=20, ge=1, le=100),
+        owner=Depends(user),
+    ):
+        # 作者：LHF；时间：2026-10-22；作用：分页读取当前用户会话的调用概要，独立于 SSE 历史上限。
+        await runtime.session(session_id, owner)
+        return await runtime.db.model_calls(session_id, run_id, after, limit)
+
+    @app.get("/api/sessions/{session_id}/model-calls/{call_id}")
+    async def model_call(session_id: str, call_id: str, owner=Depends(user)):
+        # 作者：LHF；时间：2026-10-22；作用：校验归属后读取单次实际输入和响应快照。
+        await runtime.session(session_id, owner)
+        record = await runtime.db.get(f"model-call:{call_id}")
+        if not record or record.get("session_id") != session_id or record.get("user_id") != owner:
+            raise DomainError("模型调用快照不存在或未记录", 404)
+        return record
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: MessageRequest, owner=Depends(user)):
@@ -269,6 +340,7 @@ def create_app(database_path=None, model=None):
             "capacity_source": "default:256K",
             "tested_at": time.time(),
         }
+        runtime.diagnostics.remember_secret(profile.get("api_key"))
         try:
             test = await runtime.model.probe(profile)
             profile.update(test, test_status="connected")
@@ -296,10 +368,12 @@ def create_app(database_path=None, model=None):
         if not profile or profile.get("kind") != "profile":
             raise DomainError("模型配置不存在", 404)
         # 重测旧记录时保留原启用状态，只迁移为布尔开关，不重新保存旧强度字段。
-        body = ModelProfile.model_validate({
-            **{k: profile[k] for k in ModelProfile.model_fields if k in profile},
-            "thinking_enabled": thinking_enabled(profile),
-        })
+        body = ModelProfile.model_validate(
+            {
+                **{k: profile[k] for k in ModelProfile.model_fields if k in profile},
+                "thinking_enabled": thinking_enabled(profile),
+            }
+        )
         return await save_profile(body, profile_id)
 
     @app.delete("/api/models/{profile_id}")

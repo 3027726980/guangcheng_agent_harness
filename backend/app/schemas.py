@@ -86,37 +86,6 @@ class SteeringRequest(StrictModel):
     tool_names: list[str] = Field(default_factory=list, max_length=16)
 
 
-class CalculatorArgs(StrictModel):
-    expression: str = Field(min_length=1, max_length=256, description="括号、小数、+ - * / %；不支持代码")
-
-
-class SearchArgs(StrictModel):
-    query: str = Field(min_length=1, max_length=500, description="查询样例资料；结果为明确标记的模拟数据")
-    limit: int = Field(default=3, ge=1, le=10)
-
-
-class TodoArgs(StrictModel):
-    # 同一参数结构同时用于模型工具和手动接口；写操作需要调用方持有最新版本。
-    action: Literal["add", "list", "update", "complete", "delete"]
-    todo_id: str | None = None
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    notes: str | None = Field(default=None, max_length=4000)
-    expected_version: int | None = Field(default=None, ge=1)
-    status: Literal["pending", "completed"] | None = None
-
-    @model_validator(mode="after")
-    def required_by_action(self):
-        # 字段是否必填取决于 action，跨字段规则在整体校验时检查。
-        if self.action == "add" and not self.title:
-            raise ValueError("新增待办必须提供标题")
-        if self.action in {"update", "complete", "delete"}:
-            if not self.todo_id or self.expected_version is None:
-                raise ValueError("修改待办必须提供 todo_id 与 expected_version；请先查询")
-        if self.action == "update" and self.title is None and self.notes is None and self.status is None:
-            raise ValueError("修改内容不能为空")
-        return self
-
-
 class ToolCall(StrictModel):
     # arguments 保持模型返回的原始 JSON 字符串，注册表按具体工具参数模型解析。
     id: str = Field(min_length=1, max_length=200)

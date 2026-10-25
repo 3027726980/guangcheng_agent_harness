@@ -44,11 +44,12 @@
               { label: '用户 B', value: 'B' },
             ]"
             style="width: 110px"
-            @update:value="(value) => safely(() => switchUser(value))"
+            @update:value="/* 作用：响应用户身份选择。 */ (value) => safely(/* 作用：切换演示用户并重新加载数据。 */ () => switchUser(value))"
           />
         </div>
       </n-layout-header>
       <n-layout-content class="content">
+        <div v-if="state.loggingError" role="alert" class="logging-warning">{{ state.loggingError }}</div>
         <router-view />
       </n-layout-content>
     </n-layout>
@@ -56,6 +57,9 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：导航布局、响应式侧栏与演示用户切换。
 import { h, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -81,22 +85,25 @@ import { safely, state, switchUser } from "@/api/harness";
 const route = useRoute();
 const router = useRouter();
 const narrow = window.matchMedia("(max-width: 640px)");
+// 小屏默认收起导航，卸载时移除媒体查询监听，避免重复挂载累积回调。
 const collapsed = ref(narrow.matches);
-const updateNarrow = (event: MediaQueryListEvent) => {
+const updateNarrow = /* 作用：根据媒体查询结果切换侧栏折叠状态。 */ (event: MediaQueryListEvent) => {
   collapsed.value = event.matches;
 };
-onMounted(() => narrow.addEventListener("change", updateNarrow));
-onUnmounted(() => narrow.removeEventListener("change", updateNarrow));
+onMounted(/* 作用：组件挂载后初始化业务或注册媒体查询监听。 */ () => narrow.addEventListener("change", updateNarrow));
+onUnmounted(/* 作用：组件卸载时移除媒体查询监听，防止重复回调。 */ () => narrow.removeEventListener("change", updateNarrow));
 const icons = [GridOutline, DocumentOutline, InformationCircleOutline];
-const menuOptions = pages.map((page, index) => ({
+const menuOptions = pages.map(/* 作用：将页面路由转换为导航菜单。 */ (page, index) => ({
+  // 导航菜单直接读取路由配置，页面标题和链接统一维护。
   label: page.meta.title,
   key: `/${page.path}`,
-  icon: () =>
-    h(NIcon, null, { default: () => h(icons[index] ?? DocumentOutline) }),
+  icon: /* 作用：生成当前导航项的图标容器。 */ () =>
+    h(NIcon, null, { default: /* 作用：渲染路由对应的图标，缺省时使用文档图标。 */ () => h(icons[index] ?? DocumentOutline) }),
 }));
 </script>
 
 <style scoped>
+.logging-warning { padding: 10px 16px; color: #933b23; background: #fff1dc; }
 .main-layout {
   height: 100dvh;
 }

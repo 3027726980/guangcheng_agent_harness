@@ -20,6 +20,8 @@
       调用与结果合并为步骤。点击展开原始记录；文本增量和聊天消息在对话区查看。
     </p>
   </div>
+  <ModelCallContext v-if="currentRun" :session-id="currentRun.session_id"
+    :run-id="currentRun.id" :revision="callRevision" />
   <p v-if="!steps.length" class="trace-hint">此任务暂无可展示的执行步骤。</p>
   <details
     v-for="(step, index) in visibleSteps"
@@ -59,7 +61,11 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：按任务聚合和分页展示执行链路事件。
 import { computed, ref, watch } from "vue";
+import ModelCallContext from "./ModelCallContext.vue";
 import { NPagination, NSelect, NTag } from "naive-ui";
 import { eventLabel, runStatus, traceSteps } from "@/lib/chat-presentation";
 import { formatTokenCount } from "@/lib/token-format";
@@ -68,44 +74,54 @@ const props = defineProps<{ runs: Run[]; events: TraceEvent[] }>();
 const selectedRun = ref<string | null>(null),
   page = ref(1),
   pageSize = 8;
-const options = computed(() =>
-  [...props.runs].reverse().map((run) => ({
+// 默认选中最近任务；任务变化后重置页码，列表缩短时修正越界页码。
+const options = computed(/* 作用：生成最近任务优先的链路选择项。 */ () =>
+  [...props.runs].reverse().map(/* 作用：生成最近任务优先的链路选择项。 */ (run) => ({
     label: `${runStatus(run.status, run.reason)} · ${run.content.slice(0, 42)}`,
     value: run.id,
   })),
 );
 watch(
   options,
-  (options) => {
-    if (!options.some((item) => item.value === selectedRun.value))
+  /* 作用：任务列表变化后保留有效选择，否则选中最近任务。 */ (options) => {
+    if (!options.some(/* 作用：检查是否存在符合当前条件的记录。 */ (item) => item.value === selectedRun.value))
       selectedRun.value = options[0]?.value || null;
   },
   { immediate: true },
 );
-watch(selectedRun, () => {
+watch(selectedRun, /* 作用：切换链路任务后回到步骤第一页。 */ () => {
   page.value = 1;
 });
-const currentRun = computed(() =>
-  props.runs.find((run) => run.id === selectedRun.value),
+const currentRun = computed(/* 作用：定位当前选中的任务。 */ () =>
+  props.runs.find(/* 作用：按当前标识或状态定位匹配记录，避免引用其他任务或会话。 */ (run) => run.id === selectedRun.value),
 );
-const steps = computed(() =>
+const callRevision = computed(() => {
+  // 作者：LHF；时间：2026-10-22；作用：仅模型状态变化时刷新快照列表，不跟随逐字输出请求。
+  return props.events.filter(event => event.run_id === selectedRun.value &&
+    ["model.started", "model.context", "model.finished", "model.failed", "run.updated"].includes(event.type))
+    .reduce((latest, event) => Math.max(latest, event.id), 0);
+});
+const steps = computed(/* 作用：按任务和调用 ID 整理工具或链路步骤。 */ () =>
+  // 先限定当前任务，再聚合一次调用的多个事件，分页单位是执行步骤。
   traceSteps(
-    props.events.filter((event) => event.run_id === selectedRun.value),
+    props.events.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (event) => event.run_id === selectedRun.value),
   ),
 );
 watch(
-  () => steps.value.length,
-  (length) => {
+  /* 作用：读取监听所依赖的状态，变化后触发界面同步。 */ () => steps.value.length,
+  /* 作用：步骤数量变化后修正越界页码。 */ (length) => {
     page.value = Math.min(
       page.value,
       Math.max(1, Math.ceil(length / pageSize)),
     );
   },
 );
-const visibleSteps = computed(() =>
+const visibleSteps = computed(/* 作用：截取当前页应展示的链路步骤。 */ () =>
   steps.value.slice((page.value - 1) * pageSize, page.value * pageSize),
 );
 function describe(event: TraceEvent) {
+  // 作用：将链路事件转换为包含结束原因、用量或工具结果的简短描述。
+  // 摘要描述用于快速浏览，事件原始数据仍可在详情中检查。
   if (event.type === "run.updated")
     return runStatus(event.data.status, event.data.reason);
   if (event.type === "tool.finished")

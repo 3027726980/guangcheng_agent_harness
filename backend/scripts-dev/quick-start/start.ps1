@@ -1,3 +1,6 @@
+# 作者：LHF。
+# 时间：2026-10-20。
+# 作用：检查启动环境和项目端口归属，根据参数执行只读检查、启动或受控重启。
 [CmdletBinding()]
 param(
     [ValidateSet('All', 'Backend', 'Frontend')]
@@ -15,6 +18,7 @@ $needsBackend = $Target -in @('All', 'Backend')
 $needsFrontend = $Target -in @('All', 'Frontend')
 
 function Get-ProjectListener {
+    # 作用：检查监听进程及其父进程是否属于当前项目，返回可安全重启的端口与进程标识。
     param([int]$Port)
     $projectPattern = [regex]::Escape($projectRoot.Replace('/', '\')) + '(?=[\\/"\s]|$)'
     foreach ($listener in @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) {

@@ -15,7 +15,7 @@ from urllib.parse import quote
 import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
-from app.model_protocol import thinking_options
+from app.request_capture import capture_request, request_body
 from app.response_parser import ReasoningParser, native_reasoning, protocol_reasoning
 from app.schemas import ModelReply, ToolCall
 
@@ -52,27 +52,19 @@ class OpenAIModel:
                 base_url=profile["base_url"],
                 max_retries=0,
                 timeout=timeout,
+                # 传递可选的 HTTP 传输，允许离线测试替换网络请求。
                 **({"http_client": httpx.AsyncClient(transport=self.transport)} if self.transport else {}),
             ) as client:
-                kwargs = {
-                    "model": profile["model"],
-                    "messages": messages,
-                    "stream": on_text is not None,
-                }
-                if tools:
-                    kwargs["tools"] = tools
-                    # 所有工具保持可用，让模型根据上下文偏好自行决定是否调用。
-                    kwargs["tool_choice"] = "auto"
-                if max_tokens is not None:
-                    # 仅调用方明确指定时发送输出限制；普通回答和摘要默认不发送。
-                    kwargs[profile.get("output_token_parameter", "max_tokens")] = max_tokens
-                options = thinking_options(profile)
-                if options:
-                    # 仅发送模式开关，强度使用供应商默认值；不再携带 reasoning_effort。
-                    kwargs["extra_body"] = options
+                kwargs = request_body(profile, messages, tools, max_tokens, on_text is not None)
+                await capture_request(kwargs)
                 response = await client.chat.completions.create(**kwargs)
+                # 非流式响应直接解析并返回
                 if on_text is None:
                     choice = response.choices[0]
+                    # 非流式也必须携带明确结束原因，不能把缺失字段默认为正常停止。
+                    if not choice.finish_reason:
+                        raise ModelFailure("模型响应缺少结束原因，未执行工具")
+                    # 解析回答、原生思考和工具调用
                     parser = ReasoningParser()
                     parts = parser.push(choice.message.content or "") + parser.finish()
                     return ModelReply(
@@ -80,13 +72,15 @@ class OpenAIModel:
                         reasoning=native_reasoning(choice.message)
                         + "".join(value for kind, value in parts if kind == "reasoning"),
                         reasoning_content=protocol_reasoning(choice.message),
-                        finish_reason=choice.finish_reason or "stop",
+                        finish_reason=choice.finish_reason,
+                        # 工具调用 ID 直接使用供应商返回值，本地不重新生成；Runtime 负责查重。
                         calls=[
                             ToolCall(id=call.id, name=call.function.name, arguments=call.function.arguments)
                             for call in choice.message.tool_calls or []
                         ],
                         usage=response.usage.model_dump() if response.usage else {},
                     )
+                # 流式响应逐块解析并发送
                 text, reasoning, pending, finish, usage = "", "", {}, "", {}
                 reasoning_content = None
                 parser = ReasoningParser()
@@ -103,14 +97,25 @@ class OpenAIModel:
                             text += value
                             await on_text(value)
 
+                # 流式响应逐块解析并发送
                 async for chunk in response:
+                    # 更新使用量统计
                     if chunk.usage:
                         usage = chunk.usage.model_dump()
+                    # 跳过无内容块
                     if not chunk.choices:
                         continue
+                        # 获取当前块的响应信息
+                        continue
                     choice = chunk.choices[0]
+                    # 更新结束原因
                     finish = choice.finish_reason or finish
+                    # 获取当前块的 delta 信息
                     delta = choice.delta
+                    # 获取当前块的原生思考内容
+                    native = native_reasoning(delta)
+                    # 获取当前块的协议思考内容
+                    raw = protocol_reasoning(delta)
                     native = native_reasoning(delta)
                     raw = protocol_reasoning(delta)
                     if raw is not None:
@@ -122,6 +127,7 @@ class OpenAIModel:
                         # 工具名和 JSON 参数都可能分片到达，按调用 index 累积后统一校验。
                         entry = pending.setdefault(call.index, {"id": "", "name": "", "arguments": ""})
                         if call.id:
+                            # index 用于拼装本次响应的分片，id 用于后续关联工具结果，二者用途不同。
                             entry["id"] = call.id
                         if call.function:
                             if call.function.name:
@@ -133,13 +139,20 @@ class OpenAIModel:
                     # 网络流结束不等于模型正常结束，缺少结束标记不能执行残缺工具请求。
                     raise ModelFailure("模型流意外结束，未收到完整结束标记")
                 calls = []
+                # 拼装并验证工具调用
                 for index in sorted(pending):
                     item = pending[index]
                     if not item["id"] or not item["name"]:
                         raise ModelFailure("工具调用流不完整，未执行工具")
                     calls.append(ToolCall(**item))
-                return ModelReply(text=text, reasoning=reasoning, reasoning_content=reasoning_content,
-                                  calls=calls, finish_reason=finish, usage=usage)
+                return ModelReply(
+                    text=text,
+                    reasoning=reasoning,
+                    reasoning_content=reasoning_content,
+                    calls=calls,
+                    finish_reason=finish,
+                    usage=usage,
+                )
         except (APIConnectionError, APITimeoutError) as error:
             raise ModelFailure("模型连接失败或请求超时", retryable=True) from error
         except APIStatusError as error:
@@ -224,9 +237,9 @@ class ScriptedModel:
         self.replies = list(replies)
         self.inputs = []
 
-    async def complete(self, profile, messages, tools, max_tokens, timeout, on_text=None,
-                       on_reasoning=None):
+    async def complete(self, profile, messages, tools, max_tokens, timeout, on_text=None, on_reasoning=None):
         # 离线测试按顺序消费预设响应，并深拷贝输入，防止后续修改影响断言证据。
+        await capture_request(request_body(profile, messages, tools, max_tokens, on_text is not None))
         self.inputs.append(json.loads(json.dumps(messages)))
         if not self.replies:
             raise ModelFailure("测试模型响应已耗尽")
@@ -235,6 +248,9 @@ class ScriptedModel:
             raise reply
         if callable(reply):
             reply = await reply(messages, on_text)
+        # 离线夹具省略结束原因时按内容补齐正常协议；显式设置的异常值原样保留供测试。
+        if reply.calls and "finish_reason" not in reply.model_fields_set:
+            reply = reply.model_copy(update={"finish_reason": "tool_calls"})
         if on_reasoning and reply.reasoning:
             await on_reasoning(reply.reasoning)
         if on_text and reply.text:

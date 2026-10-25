@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 node_modules/
 dist/
@@ -26,3 +27,6 @@ playwright-report/
 .playwright-cli/
 output/playwright/
 
+
+# Local model inputs and diagnostic records
+logs/

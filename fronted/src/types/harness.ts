@@ -9,22 +9,38 @@ export interface Session {
   user_id: string;
   active_runs?: { id: string; status: string }[];
 }
-/** 作用：一次聊天或压缩执行的状态和预算信息。 */
+// 作者：LHF；时间：2026-10-21；作用：同步后端 app/run.py 的公开任务字段。
+export type RunStatus =
+  | "queued" | "running" | "cancelling" | "completed"
+  | "cancelled" | "failed" | "interrupted" | "limited";
+/** 作用：一次聊天或压缩执行的状态和预算信息；内部配置与临时输出不会返回。 */
 export interface Run {
   // 一次排队执行对应一个 Run，可能用于聊天或手动压缩。
   id: string;
   session_id: string;
   user_id: string;
+  client_id: string;
   content: string;
-  status: string;
-  reason?: string;
+  status: RunStatus;
+  reason?: string | null;
   model_calls: number;
   tool_calls: number;
   created_at: number;
-  settings?: { retries?: number };
-  purpose?: string;
-  compaction_result?: string;
-  compaction_message?: string;
+  started_at?: number | null;
+  ended_at?: number | null;
+  tool_names?: string[];
+  settings?: { retries?: number } | null;
+  purpose?: "chat" | "context_compaction";
+  model_snapshot?: {
+    id: string;
+    model: string;
+    context_capacity: number;
+    capacity_source: string;
+  } | null;
+  compaction_result?: "compacted" | "skipped" | null;
+  compaction_message?: string | null;
+  steering_id?: string | null;
+  steering_run_id?: string | null;
 }
 /** 作用：带执行来源、协议消息及思考展示元数据的历史记录。 */
 export interface Message {
@@ -33,6 +49,8 @@ export interface Message {
   run_id: string;
   timestamp: number;
   input_kind?: string;
+  // 作者：LHF；时间：2026-10-22；作用：展示用户原文，模型正文可包含写入时固定的工具偏好。
+  original_content?: string;
   reasoning?: string;
   message: {
     role: string;
@@ -93,4 +111,31 @@ export interface Summary {
 export interface AvailableTool {
   name: string;
   description: string;
+}
+
+/** 作者：LHF；时间：2026-10-22；作用：描述模型调用的分页概要。 */
+export interface ModelCall {
+  call_id: string;
+  run_id: string;
+  session_id: string;
+  sequence: number;
+  timestamp: number;
+  purpose: string;
+  attempt: number;
+  model: string;
+  status: string;
+  context_version: number | null;
+  prompt_versions: Record<string, string>;
+}
+
+/** 作用：完整脱敏输入按需获取，不随普通事件广播。 */
+export interface ModelCallDetail extends ModelCall {
+  request: {
+    messages: Array<{ role: string; content?: unknown; tool_calls?: unknown; tool_call_id?: string; reasoning_content?: string }>;
+    tools?: unknown[];
+    [key: string]: unknown;
+  };
+  response?: unknown;
+  error?: string;
+  partial_response?: { text: string; reasoning: string };
 }

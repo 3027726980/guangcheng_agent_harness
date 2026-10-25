@@ -2,12 +2,18 @@
 
 日期：2026-10-20。本文件仅记录实际完成的检查。离线验证不能替代真实供应商验收。
 
-## 2026-10-20：新版三天指导路线与 BaseTool 发布复核
+## 2026-10-20：final_answer 显式结束工具
 
-- backend_learning_3days.md 替换为每天 3–4 小时、按八条核心链路组织的完整路线；core_chains_3days.md 改为导航，README、设计决策及提示记录同步更新。
+- 后端 `.venv/Scripts/python.exe -m pytest -q`：111 passed，16.00 秒；`-m ruff check app tests` 通过。全部使用离线模型、临时数据库或 MockTransport。
+- 新增 final_answer 工具，基于 BaseTool／ToolRegistry 接收 answer 参数；执行成功后保存工具配对结果和最终 assistant 消息，不再多调用模型。普通文本和澄清回复保留原有结束方式。
+- test_final_answer.py 覆盖有效答案、工具声明与严格参数、业务结果后的结束及下一轮历史、空白参数／截断／执行失败后的修正、混合调用无副作用、工具预算、引导优先及取消优先。
+- 未启动服务、未调用真实模型、未运行前端构建或浏览器验收，未提交或推送。页面复用现有 message.created 和工具事件展示，真实模型是否按提示调用仍待实际验收。
+
+## 2026-10-20：BaseTool 与源码索引发布复核
+
 - 完整源码索引通过 AST 重新生成，覆盖 21 个后端源码／测试文件、279 个符号；不导入应用，包含模型协议、思考解析、新工具类和最新测试名称。
 - 后端在 backend 目录执行 `.venv/Scripts/python.exe -m pytest -q`：101 passed，13.24 秒；`-m ruff check app tests` 通过。
-- 发布前静态核对文档链接、引用测试名称、精读行段及索引符号范围，并检查待提交 diff 与常见凭据格式。发布范围为 BaseTool 重构、后端注释／测试及相关文档，无关前端、启动脚本、脚手架和架构回答保留。
+- 发布前静态核对文档链接、引用测试名称及索引符号范围，并检查待提交 diff 与常见凭据格式。发布范围为 BaseTool 重构、后端注释／测试及相关文档，无关前端、启动脚本、脚手架和架构回答保留。
 - 本次未启动或重启服务、未调用真实模型、未重新执行浏览器验收或前端构建。测试属于离线回归，不能替代真实供应商及部署验收。
 
 ## 2026-10-20：BaseTool 统一工具契约
@@ -163,3 +169,95 @@ PowerShell 解析通过；Windows PowerShell 运行全量重启预检通过，�
 9. 在任务执行期间修改全局设置，当前任务保持快照，新任务使用新配置；重启后遗留任务有中断证据。
 
 题目要求发送 GitHub 链接，不提供 API。本轮毛毛已授权推送代码，最终五道架构题选择和真实模型验收仍待完成。详尽界面操作见 [逐项验收清单](manual_test_checklist.md)。
+
+## 2026-10-21：Run 明确数据模型
+
+- 后端：在 backend 目录运行 `.venv/Scripts/python.exe -m pytest -q`，118 项通过；Ruff 检查通过。
+- 新检查覆盖创建／赋值拒绝未知字段、非法状态和计数，旧精简记录默认值兼容，内部字段不序列化，active 与执行协程共享同一模型对象及取消收尾；API 会话详情也验证内部模型配置不泄漏。
+- 前端：`npx vue-tsc --noEmit` 通过；`npm test` 的 11 项通过。
+- 未启动服务、未调用真实模型、未提交或推送。字段类型约束不等于状态转换规则或答案正确性校验。
+
+## 2026-10-22 日志、增量上下文与调用输入
+
+实际执行结果：后端 `pytest backend/tests -q` 为 **130 passed（26.13 秒）**；前端 `npm test` 为 **13 passed**，`npm run build`（vue-tsc + Vite）成功。`ruff check backend/app backend/tests` 通过，本轮修改的 19 个后端文件格式检查通过。检查 diff 时保留了原有未提交修改；全仓库空白检查仍发现既有 `架构设计回答.md` 的行尾空白，未代为修改。
+
+新增离线验证涵盖：热加载后连续消息／工具／引导不全量查历史，按清单恢复、局部前缀替换、版本冲突、事务回滚，以及 SQLite 提交后取消仍发布一致缓存；分块摘要及后续新对话读取最新模板，重试输入版本固定；真实 SDK 配合 MockTransport 的快照与 HTTP JSON 一致；摘要／对话／重试元数据、独立输入副本、取消部分输出、数据库及文件保存失败阻止发送；北京时间跨日、完整正文和凭据脱敏；调用列表分页、归属与详情隔离；真实 Vue 组件无 DOM 挂载验证按需详情、游标分页和切换 Run 的迟到响应。
+
+已移除 final_answer 注册、参数与特殊执行分支，离线回归验证普通完成、空白／截断拒绝成功、旧调用历史保留；原有引导竞争、排队继续及取消测试通过。完整历史和 SQLite 保持兼容，不回填旧调用输入或本地日志。
+
+本轮没有启动监听服务、数据库服务或 Docker，没有调用真实模型，也没有提交或推送。组件测试和 MockTransport 不能替代真实浏览器及供应商联调；人工入口见 manual_test_checklist.md，运行和维护说明见 logs_context.md。
+
+## 2026-10-23：按笔试要求精简后端测试
+
+本节是当前结果；此前各节记录当时的测试集合与行为，不代表当前仍保留对应测试。
+
+### 实际执行与覆盖率
+
+- 精简前完整离线测试：**147 passed，28.90 秒**，运行结果包含收集的 147 个参数化实例。
+- 精简后：**75 passed，10.14 秒**；单元 **50** 项、集成 **25** 项，分布在 10 个测试文件。真实模型目录只有 Markdown，不被 pytest 收集。
+- 运行命令：在 backend 执行 `.\.venv\Scripts\python.exe -m pytest -q --cov=app --cov-branch --cov-report=term-missing --cov-report=html --cov-report=xml --junitxml=test-results/coverage/tests.xml`。
+- 综合行覆盖率：**75.82%**（1339/1766）；分支覆盖率：**58.77%**（315/536）。终端语句与分支综合比例为 **71.85%**，不是行覆盖率。
+- 报告：[HTML](../backend/test-results/coverage/html/index.html)、[覆盖率 XML](../backend/test-results/coverage/coverage.xml)、[测试执行 XML](../backend/test-results/coverage/tests.xml)。本地生成文件被 Git 忽略，其他人克隆后需按 [命令](../backend/tests/README.md) 重新生成。
+- 统计包含整个 `app` 的 20 个 Python 模块，没有按难度排除文件；这是**单元＋集成测试综合覆盖率**，没有设置门槛。
+- `ruff check tests`、`ruff format --check tests` 通过（20 个 Python 文件）；本轮改动范围的 `git diff --check` 通过，后端 `uv lock --check` 通过。
+- 未覆盖区域主要是已明确不在此次笔试测试范围内的 API 扩展、排队／引导／取消恢复、供应商探测、日志故障与缓存恢复分支；具体遗漏行及分支以 HTML 为准。覆盖率不代表真实模型任务成功率。
+
+### 迁移、合并、删除、新增
+
+- 旧集合 107 个测试函数，最终 41 个。19 个原函数按职责迁移，其中基础压缩用例去掉工具偏好断言，增加完整工具消息覆盖与原历史不变检查。
+- 88 个旧函数不再以原定义保留，包含删除的扩展用例及被合并／重写的核心场景；新增／重写 22 个函数。函数数算式：`107 - 88 + 22 = 41`；参数化实例数由 147 变为 75，不能将函数数与实例数混算。
+- 合并／重写：原 `test_tool_loop_followup_and_session_isolation` 拆为多工具追问与纯对话会话隔离；直接回答用例去掉请求去重扩展；待办综合事务用例收缩为 CRUD；重复流式拼参验证合并入保留的思考＋工具流解析用例；异常结束组合迁到单元校验，保留一个实际截断写入拒绝的 Runtime 用例；空白回答单独保留。
+- 删除：排队转引导、复杂取消竞争、重启恢复、旧 final_answer 历史兼容、供应商专属兼容、日志跨日与调用详情分页、模板热更新、增量缓存及复杂故障恢复专用场景。生产功能仍存在；其独有保护不再计入当前自动化保证。
+- 新增必要边界：参数缺失／错误类型／未知字段、完整工具 Schema、列表隔离与内部字段保护、预算最小值、压缩水位、异常结束原因、空／多段／残留思考标签、完整工具消息块；补充持续工具循环达到轮次上限、工具错误回传、核心 Trace 和进程内 API 入口验证。
+- 公共夹具集中在 support，不再从其他 test 文件导入；日志写入临时目录，默认异步 HTTP 传输被阻断。
+
+原文件分解（“未保留原定义”包含合并／重写，不全是直接删除）：
+
+| 原文件 | 原函数数 | 按职责迁移 | 未保留原定义 |
+| --- | ---: | ---: | ---: |
+| `test_api.py` | 5 | 0 | 5 |
+| `test_context.py` | 5 | 3 | 2 |
+| `test_context_state.py` | 9 | 0 | 9 |
+| `test_deepseek_compat.py` | 6 | 0 | 6 |
+| `test_diagnostics_capture.py` | 8 | 0 | 8 |
+| `test_final_answer.py` | 4 | 0 | 4 |
+| `test_llm.py` | 7 | 3 | 4 |
+| `test_manual_compaction.py` | 6 | 0 | 6 |
+| `test_recovery.py` | 5 | 0 | 5 |
+| `test_response_features.py` | 14 | 4 | 10 |
+| `test_run.py` | 3 | 0 | 3 |
+| `test_runtime.py` | 17 | 3 | 14 |
+| `test_thinking_switch.py` | 5 | 0 | 5 |
+| `test_token_budget.py` | 2 | 0 | 2 |
+| `test_tools.py` | 11 | 6 | 5 |
+
+新增／重写函数（实际名称）：
+
+- `integration/test_api.py::test_api_tools_and_independent_sessions`
+- `integration/test_runtime.py::test_direct_answer`
+- `integration/test_runtime.py::test_single_tool_result_feeds_answer`
+- `integration/test_runtime.py::test_multiple_tools_then_followup`
+- `integration/test_runtime.py::test_conversation_followup_and_session_isolation`
+- `integration/test_runtime.py::test_model_round_limit_stops_tool_loop`
+- `integration/test_runtime.py::test_model_failure_is_not_success`
+- `integration/test_runtime.py::test_tool_error_returns_to_model`
+- `integration/test_runtime.py::test_blank_answer_fails`
+- `integration/test_runtime.py::test_trace_records_tools_and_redacts_credentials`
+- `integration/test_todo.py::test_todo_crud_persists_state`
+- `unit/test_context.py::test_complete_tool_round_is_one_group`
+- `unit/test_contracts.py::test_calculator_args_reject_invalid_input`
+- `unit/test_contracts.py::test_search_args_reject_invalid_input`
+- `unit/test_contracts.py::test_todo_args_require_action_fields`
+- `unit/test_contracts.py::test_tool_schemas_describe_all_three_tools`
+- `unit/test_contracts.py::test_request_and_run_lists_are_not_shared`
+- `unit/test_contracts.py::test_output_reserve_minimum_and_capacity`
+- `unit/test_contracts.py::test_context_watermarks_must_allow_compaction`
+- `unit/test_contracts.py::test_finish_reason_rejects_invalid_response`
+- `unit/test_contracts.py::test_finish_reason_accepts_normal_answer`
+- `unit/test_response_parser.py::test_parser_handles_empty_multiple_and_incomplete_tags`
+
+### 验证边界
+
+首次精简回归发现 Trace 断言读取早于最终事件写入。按 Runtime 实际写入顺序调整测试辅助函数：数据库进入终态后，还等待执行协程收尾；没有修改生产代码。相关 Trace 与压缩定向测试 3 项通过，随后完成上述完整覆盖率运行。
+
+已提供 [需求对应表](requirements.md)、[运行与 PyCharm 说明](../backend/tests/README.md) 和 [六个真实模型验收场景](../backend/tests/agent_acceptance/README.md)，真实验收均标为“未执行”。本轮没有启动监听服务、真实模型、Docker，没有提交或推送。通过实施前快照哈希核对，生产 Python 源码未发生本轮修改；前端未编辑。

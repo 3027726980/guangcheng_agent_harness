@@ -46,6 +46,9 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：综合展示后端事件连接与模型配置就绪状态。
 import { computed } from "vue";
 import { NPopover, NTag } from "naive-ui";
 const props = defineProps<{
@@ -55,14 +58,15 @@ const props = defineProps<{
   modelIssue: string;
 }>();
 const modelReady = computed(
-  () => props.settingsStatus === "ready" && !props.modelIssue,
+  // 后端事件连接可用与模型配置可用是两件事，发送就绪必须同时满足。
+  /* 作用：判断模型配置是否已加载并通过连接测试。 */ () => props.settingsStatus === "ready" && !props.modelIssue,
 );
-const ready = computed(() => props.connected && modelReady.value);
+const ready = computed(/* 作用：同时检查模型与后端连接就绪状态。 */ () => props.connected && modelReady.value);
 const checking = computed(
-  () => props.connecting || props.settingsStatus === "loading",
+  /* 作用：判断是否仍在连接后端或加载配置。 */ () => props.connecting || props.settingsStatus === "loading",
 );
 const description = computed(
-  () =>
+  /* 作用：生成后端连接与模型就绪状态说明。 */ () =>
     `后端${props.connected ? "已链接" : "未链接"}；模型${modelReady.value ? "已配置且连接测试通过" : "未就绪：" + props.modelIssue}`,
 );
 </script>

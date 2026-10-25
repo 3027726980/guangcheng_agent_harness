@@ -9,8 +9,8 @@
 | 核心 | 自写统一 Agent Loop，原生 Function Calling |
 | 意图路由 | 首版不使用 Jev 或 Decisions；后续扩展 |
 | 工具 | 待办、计算、模拟搜索 |
-| 工具契约 | 统一继承 BaseTool，实现异步 execute；通过 ToolRegistry 注册、校验和调用，手动待办也走同一入口 |
-| 学习文档 | backend_learning_3days.md 是唯一完整路线，每天 3–4 小时；core_chains_3days.md 仅导航；源码索引按当前代码静态生成 |
+| 工具契约 | 统一继承 tool/base.py 的 BaseTool；各工具参数与实现独立成文件；tool/registry.py 集中注册、校验和调用，手动待办也走同一入口 |
+| Run 完成 | 正常结束、非空正文且无工具调用后，锁内检查引导与取消；移除 final_answer，历史保留 |
 | 用户 | 预置 A／B，无登录注册 |
 | 会话 | 同 Session 顺序，不同 Session 可并行，多窗口独立选择 |
 | 待办 | 用户级跨 Session 共享，版本冲突检查 |
@@ -48,3 +48,17 @@
 ## 状态
 
 方案已进入实现。自动化测试与模拟浏览器检查不代表真实供应商和真实页面联调通过，实际边界见 verification.md。
+
+## Run 数据模型（2026-10-21）
+
+执行任务统一使用 [Run](../backend/app/run.py) Pydantic 模型，集中声明状态、用途、计数、时间、配置快照和可选压缩／引导字段。Runtime 用属性访问，`active[run.id]` 与执行协程共享同一模型对象；模型不替代 control 锁或 asyncio.Task。
+
+创建和赋值均校验字段，禁止未知字段、非法状态和负计数。数据库保持 JSON 字典格式，通过 `get_run`／`list_runs` 读取并校验，写入调用 `to_record()`；submit 继续返回公开字典。旧精简记录缺少的非身份字段采用默认值，序列化使用 exclude_unset，避免平白增加字段。此兼容方式不代表可容忍任意损坏或未知字段。
+
+完整模型配置 profile／summary_profile 与流式 partial／partial_reasoning 使用 Field(exclude=True, repr=False)，不进入任务序列化和对象默认展示。公开模型快照仅记录身份与容量。正式回复仍保存为 Message；不在 Run 中加入 Task 或 Client 对象。字段校验不是状态机，合法状态之间的转换规则仍由 Runtime 控制。
+
+## 增量上下文与调用证据（2026-10-22）
+
+SQLite 保持事实来源；完整业务记录同步追加到按北京时间分日的本地日志，不从日志恢复上下文。SessionContext 的可见清单持久化，内存加载内容；普通输入构建不全量查历史。压缩只替换连续旧前缀，保护当前请求／引导和完整工具配对。摘要等待不占会话锁，提交时校验版本；失败保留原视图。
+
+实际模型请求在传输层发送前保存脱敏快照，数据库和文件均成功才发送；重试单独编号并冻结输入版本。完成或取消后补写响应／状态。调用清单通过独立 API 分页，不经 SSE 传递大正文。四类模板每次新请求读取，并通过内容哈希记录版本，不执行模板代码。完整实现说明见 [logs_context.md](logs_context.md)。

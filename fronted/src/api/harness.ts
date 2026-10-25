@@ -23,6 +23,7 @@ import type {
 export const state = reactive({
   user: sessionStorage.getItem("harness-user") || "A",
   clientId: "",
+  loggingError: "",
   connected: false,
   connecting: false,
   error: "",
@@ -197,6 +198,10 @@ export async function newSession() {
 
 function receive(event: TraceEvent) {
   // 作用：将 SSE 事件归并到共享状态、当前会话历史和临时流式输出。
+  if (event.type === "logging.status") {
+    state.loggingError = String(event.data.message || "本地日志写入异常");
+    return;
+  }
   // 用户级通知先更新共享状态；会话内消息、输出与链路事件仅应用到当前选中会话。
   if (event.type === "run.updated") {
     const run = event.data as unknown as Run;
@@ -281,6 +286,8 @@ async function connect(epoch: number) {
         decoder.decode(value, { stream: true }),
       )) {
         if (frame.event === "ready") {
+          const ready = JSON.parse(frame.data || "{}");
+          state.loggingError = ready.logging_error?.message || "";
           // 重连不自动重跑任务，而是重新读取服务端快照恢复最终执行状态。
           state.connected = true;
           state.connecting = false;

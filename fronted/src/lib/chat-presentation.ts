@@ -151,6 +151,8 @@ export function eventLabel(type: string) {
       {
         "run.updated": "任务状态",
         "model.started": "开始调用模型",
+        "model.context": "记录模型输入",
+        "logging.status": "本地日志状态",
         "model.finished": "模型返回",
         "model.failed": "模型调用失败",
         "model.retry": "等待重试",
@@ -168,7 +170,8 @@ export function eventLabel(type: string) {
   );
 }
 
-export function runStatus(status: string, reason?: string) {
+export function runStatus(status: string, reason?: string | null) {
+  // 作者：LHF；时间：2026-10-21；作用：兼容 Run 契约中尚无原因时的 null。
   // 作用：将任务状态和排队转引导原因转换为可读标签。
   if (reason === "converted_to_steering") return "已转为引导";
   return (

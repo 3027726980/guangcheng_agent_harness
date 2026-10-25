@@ -19,7 +19,7 @@
       </div>
       <template v-if="row.message.role === 'tool'">
         <strong>{{
-          calls.find((call) => call.id === row.message.tool_call_id)?.function
+          calls.find(/* 作用：按调用 ID 查找结果对应的工具名称。 */ (call) => call.id === row.message.tool_call_id)?.function
             .name || "工具"
         }}</strong>
         <span class="step-label">执行结果</span>
@@ -30,19 +30,24 @@
 </template>
 
 <script setup lang="ts">
+// 作者：LHF。
+// 注释维护时间：2026-10-20。
+// 文件作用：展示单个工具调用的参数、结果与执行状态。
 import { computed } from "vue";
 import type { Message } from "@/types/harness";
 const props = defineProps<{ rows: Message[] }>();
-const calls = computed(() =>
-  props.rows.flatMap((row) => row.message.tool_calls || []),
+const calls = computed(/* 作用：提取 assistant 声明的工具调用。 */ () =>
+  // 调用声明来自 assistant，结果来自 tool；二者分开统计以展示等待状态。
+  props.rows.flatMap(/* 作用：提取并展开每条记录对应的工具调用或 SSE 帧。 */ (row) => row.message.tool_calls || []),
 );
-const results = computed(() =>
-  props.rows.filter((row) => row.message.role === "tool"),
+const results = computed(/* 作用：提取工具返回的结果消息。 */ () =>
+  props.rows.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (row) => row.message.role === "tool"),
 );
-const pending = computed(() => results.value.length < calls.value.length);
+const pending = computed(/* 作用：判断是否还有工具调用等待结果。 */ () => results.value.length < calls.value.length);
 const failures = computed(
-  () =>
-    results.value.filter((row) => {
+  // 工具结果使用结构化 ok 字段，无法解析的结果也按异常展示。
+  /* 作用：统计工具执行失败或无法解析的结果。 */ () =>
+    results.value.filter(/* 作用：按所属任务、消息角色或状态筛选当前需要的记录。 */ (row) => {
       try {
         return JSON.parse(row.message.content || "{}").ok === false;
       } catch {
@@ -51,6 +56,8 @@ const failures = computed(
     }).length,
 );
 function pretty(content: string | null) {
+  // 作用：美化可解析的 JSON 工具内容，其他文本原样返回。
+  // 只格式化可解析 JSON，其他文本原样保留以便排查工具错误。
   try {
     return JSON.stringify(JSON.parse(content || "{}"), null, 2);
   } catch {

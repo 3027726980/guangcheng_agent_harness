@@ -4,12 +4,26 @@
 """Small SQLite repository with atomic multi-record transactions."""
 
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import JSON, Column, Float, Integer, MetaData, String, Table, delete, insert, select, update
+from sqlalchemy import (
+    JSON,
+    Column,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    delete,
+    func,
+    insert,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import create_async_engine
 
 metadata = MetaData()
@@ -107,6 +121,49 @@ class Database:
         if parent is not None:
             query = query.where(records.c.parent == parent)
         return [dict(row[0]) for row in (await connection.execute(query)).all()]
+
+    async def get_many(self, keys):
+        # 作者：LHF；时间：2026-10-22；作用：按清单分批读取消息，保持调用方顺序。
+        found = {}
+        async with self.engine.connect() as connection:
+            for offset in range(0, len(keys), 400):
+                rows = await connection.execute(
+                    select(records.c.id, records.c.data).where(records.c.id.in_(keys[offset : offset + 400]))
+                )
+                found.update({row[0]: dict(row[1]) for row in rows})
+        return [found[key] for key in keys if key in found]
+
+    async def run_messages(self, session_id, run_id):
+        # 仅查询某次执行的消息，不扫描其他轮次历史。
+        query = (
+            select(records.c.data)
+            .where(
+                records.c.kind == "message",
+                records.c.parent == session_id,
+                records.c.data["run_id"].as_string() == run_id,
+            )
+            .order_by(records.c.created, records.c.id)
+        )
+        async with self.engine.connect() as connection:
+            return [dict(row[0]) for row in (await connection.execute(query)).all()]
+
+    async def model_calls(self, session_id, run_id=None, after=0, limit=20):
+        # 按单调序号分页读取调用概要，不传输大输入。
+        # 在 SQLite 内裁掉大正文，分页清单不会先把全部请求加载到 Python。
+        query = select(
+            func.json_remove(records.c.data, "$.request", "$.response", "$.partial_response")
+        ).where(records.c.kind == "model_call", records.c.parent == session_id)
+        if run_id:
+            query = query.where(records.c.data["run_id"].as_string() == run_id)
+        query = (
+            query.where(records.c.data["sequence"].as_integer() > after)
+            .order_by(records.c.data["sequence"].as_integer())
+            .limit(limit + 1)
+        )
+        async with self.engine.connect() as connection:
+            rows = [json.loads(row[0]) for row in (await connection.execute(query)).all()]
+        items = rows[:limit]
+        return {"items": items, "next_cursor": items[-1]["sequence"] if len(rows) > limit else None}
 
     async def remove(self, key):
         # 作用：在写事务内按 ID 物理移除记录。

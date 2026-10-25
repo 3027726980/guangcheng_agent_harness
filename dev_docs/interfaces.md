@@ -11,7 +11,7 @@
 
 | 方法 | 路径 | 关键输入／输出 |
 | --- | --- | --- |
-| GET | `/health` | Runtime 与演示身份标记 |
+| GET | `/health` | Runtime、演示身份及 logging_error（无故障为 null） |
 | GET | `/users` | A／B 演示用户 |
 | GET | `/tools` | 注册工具的 name、description，供前端 @ 菜单使用；校验演示身份 |
 | POST | `/clients` | 生成窗口客户端 ID |
@@ -19,6 +19,8 @@
 | POST | `/clients/{id}/disconnect` | 显式断开对应客户端 |
 | GET / POST | `/sessions` | 会话列表附 active_runs（仅任务 ID／状态）／以 title 创建会话 |
 | GET | `/sessions/{id}` | 会话、消息、执行、摘要、最近事件 |
+| GET | `/sessions/{id}/model-calls` | 可选 run_id、after（默认 0）、limit（1–100，默认 20）；返回 items 概要与 next_cursor |
+| GET | `/sessions/{id}/model-calls/{call_id}` | 归属校验后返回完整脱敏输入、版本和结果；不存在／跨用户／跨会话为 404 |
 | DELETE | `/sessions/{id}` | 按用户归属逻辑删除；有运行／排队任务时返回 409，共享待办保留 |
 | POST | `/sessions/{id}/messages` | client_id、request_id、content、可选 tool_names；返回任务与队列状态 |
 | POST | `/sessions/{id}/compact` | client_id、request_id；空闲会话创建独立压缩任务，返回普通任务状态；忙碌返回 409，支持原停止接口 |
@@ -26,7 +28,7 @@
 | POST | `/runs/{id}/steer-queued` | 将当前用户的该条排队消息转为同 Session 当前任务的引导；原子转换、重复请求幂等；无可引导任务时返回 409 并保留队列 |
 | POST | `/runs/{id}/cancel` | 按明确任务 ID 停止 |
 | GET | `/todos` | 当前用户未删除待办 |
-| POST | `/todos` | TodoArgs，写入需要 Idempotency-Key |
+| POST | `/todos` | tool/todo.py 中的 TodoArgs，写入需要 Idempotency-Key |
 | GET / PUT | `/settings` | 全局 RuntimeSettings |
 | GET / POST | `/models` | 掩码连接列表／保存并自动测试连接 |
 | PUT / DELETE | `/models/{id}` | 修改并测试／删除未被选用的连接 |
@@ -36,7 +38,7 @@
 
 `tool_names` 默认空列表，最多 16 项；后端校验注册名称并去重，未知名称入队前拒绝。它表示用户偏好，不是强制执行列表。所有工具继续提供给模型，`tool_choice=auto`；不要求按提及顺序或逐个使用，信息不足可先询问，也可直接回答或使用其他适用工具。实际参数仍由工具层严格验证。
 
-偏好随请求和引导以消息外层 `tool_names` 元数据持久化；Context 向对应用户消息副本追加提示，参与 token 预算和摘要压缩，数据库中的原正文不变。排队转引导保留相同偏好，无提及的消息不额外注入提示。
+偏好随请求和引导以消息外层 `tool_names` 元数据持久化；消息正式应用时一次性将偏好模板追加到 `message.content`，参与 token 预算和摘要压缩，后续 Context 构建直接复用已保存正文。`original_content` 保存用户原文供聊天界面展示，缺少该字段的历史消息回退到 `message.content`；`tool_preference_version` 保存该消息实际采用的偏好模板版本。修改模板只影响随后应用的新消息，不改写已有历史。排队转引导保留相同偏好，无提及的消息不额外注入提示；已有旧记录不补写偏好正文。
 
 ## 执行与消息
 
@@ -59,6 +61,8 @@
 | `run.updated` | 任务状态、计数、设置快照和原因，不包含密钥 |
 | `message.created` | 已持久化消息 |
 | `model.started / delta / finished / failed / retry` | 调用 ID、用途、模型、内容增量、用量、重试原因和等待 |
+| `model.context` | call_id、purpose；快照已保存，完整内容通过详情接口获取 |
+| `logging.status` | 全局本地日志故障状态，前端顶部显示；SSE ready 同时携带 logging_error |
 | `model.reasoning.delta` | call_id、text；独立思考增量，不混入回答正文 |
 | `tool.started / finished` | 调用 ID、名称、参数、结果、错误、耗时 |
 | `steering.updated` | pending / applied / unprocessed |
@@ -75,6 +79,8 @@
 
 ## 工具注册契约
 
+已移除 `final_answer` 及其参数和注册项。模型返回正常结束、非空正文且无工具调用时，锁内检查引导和取消后完成。历史中的旧调用与结果只保留展示。
+
 工具内部契约：`BaseTool` 是抽象基类，子类声明 `name`、`description`、`arguments`（Pydantic 模型）和 `execution_mode`（parallel／sequential），实现 `async execute(args, db, user_id, operation_id)`。基类 `schema()` 生成函数声明；`ToolRegistry.register()` 校验继承、异步方法、元数据及重名，`execute()` 校验参数后统一分发。Agent 和手动待办接口都通过注册表，HTTP 路径及响应格式不变。同步计算与样例检索封装在异步方法中，仍在当前线程执行，不代表自动进入线程池。
 
 ## SQLite
@@ -82,3 +88,28 @@
 首版使用 `records` 存储按 kind、owner、parent 索引的业务记录，使用 `events` 存储有序执行事件。JSON payload 让初版结构保持小而可读；多类型复杂查询和正式迁移属于后续演进点。
 
 写入由单进程异步锁协调，事务内同时保存待办变更与操作去重记录；不能把进程锁当作多实例分布式锁。默认数据库为 `backend/.data/harness.db`，可用 `HARNESS_DB` 环境变量覆盖。
+
+## Run 字段契约（2026-10-21）
+
+后端定义：[app/run.py](../backend/app/run.py)；前端公开类型：[types/harness.ts](../fronted/src/types/harness.ts)。任务接口与 run.updated 保持原有 JSON 字段结构。
+
+| 分组 | 字段 |
+| --- | --- |
+| 身份与请求 | id、session_id、user_id、client_id、content、purpose、tool_names |
+| 状态与预算 | status、reason、model_calls、tool_calls |
+| 生命周期 | created_at、started_at、ended_at，Unix 秒 |
+| 配置快照 | settings、model_snapshot（id、model、context_capacity、capacity_source） |
+| 可选扩展 | compaction_result、compaction_message、steering_id、steering_run_id |
+| 仅内存，不序列化 | profile、summary_profile、partial、partial_reasoning |
+
+status 仅允许 queued、running、cancelling、completed、cancelled、failed、interrupted、limited；purpose 为 chat 或 context_compaction。可选字段在尚未赋值时可省略，reason 可为 null。settings 不包含模型连接密钥。
+
+## 调用快照与可见上下文（2026-10-22）
+
+`records.kind=model_call`：id 为 `model-call:<call_id>`，包含 user_id、session_id、run_id、purpose（answer／summary）、attempt、timestamp、sequence、model、status、request、prompt_versions、context_version，以及完成后的 response／error／partial_response、ended_at。request 是实际 HTTP JSON 请求体，SDK extra_body 已合并，未设置的参数不补造；API Key 和认证头不属于该请求体。状态为 sending／completed／failed／cancelled。正文、工具结果和协议思考不截断，但凭据脱敏。
+
+列表按 sequence 升序，after 是最后一条 sequence；有下一页时 next_cursor 为本页最后序号，结束为 null。列表不返回 request、response 或 partial_response，详情按需读取。列表不依赖 events 的最近 2000 条窗口。旧调用没有该记录，列表为空或不包含旧条目，不重建过去输入。
+
+`records.kind=context`：id 为 `context:<session_id>`，保存 version、summary 节点、有序 message_ids。消息与清单同事务保存；摘要与清单同事务替换。系统提示、工具偏好及兼容协议字段只在独立输入副本上动态注入。完整聊天历史继续由 message 记录提供。
+
+本地目录和失败策略见 [日志与增量上下文](logs_context.md)。
